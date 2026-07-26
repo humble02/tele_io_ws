@@ -1,0 +1,341 @@
+#!/usr/bin/env python3
+"""Vive chest-frame teleoperation node for Marvin arms."""
+
+from __future__ import annotations
+
+import argparse
+import sys
+from dataclasses import dataclass, fields
+from pathlib import Path
+from typing import Optional
+
+import numpy as np
+import rclpy
+import tf2_ros
+import yaml
+from ament_index_python.packages import get_package_share_directory
+from rclpy.executors import ExternalShutdownException
+from rclpy.duration import Duration
+from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
+from rclpy.time import Time
+from rclpy.utilities import remove_ros_args
+from sensor_msgs.msg import JointState
+from std_srvs.srv import SetBool
+from tf2_ros import Buffer, TransformListener
+
+from vive_marvin_teleop.kine_solver import MarvinIkSolver
+
+
+@dataclass
+class TeleopConfig:
+    control_rate_hz: float = 60.0
+    auto_enable: bool = False
+    feedback_timeout_sec: float = 0.5
+    tf_timeout_sec: float = 0.5
+    left_feedback_topic: str = "/marvin/left/joint_states"
+    right_feedback_topic: str = "/marvin/right/joint_states"
+    left_command_topic: str = "/marvin/left/joint_commands"
+    right_command_topic: str = "/marvin/right/joint_commands"
+    left_reference_frame: str = "left_chest"
+    right_reference_frame: str = "right_chest"
+    left_target_frame: str = "tianji_left"
+    right_target_frame: str = "tianji_right"
+    left_joint_names: list[str] = None
+    right_joint_names: list[str] = None
+    zsp_type: int = 1
+    left_zsp_para: list[float] = None
+    right_zsp_para: list[float] = None
+    zsp_angle_deg: float = 0.0
+    singular_tolerance_deg: list[float] = None
+    max_joint_step_rad: float = 0.02
+    command_publish_on_change_only: bool = False
+
+    @classmethod
+    def from_file(cls, path: Path) -> "TeleopConfig":
+        with path.open("r", encoding="utf-8") as stream:
+            raw = yaml.safe_load(stream) or {}
+        raw = raw.get("vive_marvin_teleop", raw)
+        valid = {field.name for field in fields(cls)}
+        data = {key: value for key, value in raw.items() if key in valid}
+        cfg = cls(**data)
+        cfg.left_joint_names = cfg.left_joint_names or [f"Joint{i}_L" for i in range(1, 8)]
+        cfg.right_joint_names = cfg.right_joint_names or [f"Joint{i}_R" for i in range(1, 8)]
+        cfg.left_zsp_para = cfg.left_zsp_para or [0.0, -1.0, -0.5, 0.0, 0.0, 0.0]
+        cfg.right_zsp_para = cfg.right_zsp_para or [0.0, 1.0, -0.5, 0.0, 0.0, 0.0]
+        cfg.singular_tolerance_deg = cfg.singular_tolerance_deg or [5.0, 5.0, 5.0]
+        return cfg
+
+
+class ArmState:
+    def __init__(self, side: str, joint_names: list[str]):
+        self.side = side
+        self.joint_names = list(joint_names)
+        self.feedback_rad: Optional[list[float]] = None
+        self.feedback_stamp: Optional[Time] = None
+        self.last_command_rad: Optional[list[float]] = None
+        self.last_warn: dict[str, Time] = {}
+
+
+class ViveMarvinTeleopNode(Node):
+    def __init__(self, config_path: Path, kine_config_path: Path):
+        super().__init__("vive_marvin_teleop")
+        self._config_path = config_path
+        self._cfg = TeleopConfig.from_file(config_path)
+        if self._cfg.control_rate_hz <= 0.0:
+            raise ValueError("control_rate_hz must be > 0")
+
+        self._ik = MarvinIkSolver(kine_config_path)
+        self._enabled = bool(self._cfg.auto_enable)
+
+        self._tf_buffer = Buffer()
+        self._tf_listener = TransformListener(self._tf_buffer, self)
+
+        self._left = ArmState("left", self._cfg.left_joint_names)
+        self._right = ArmState("right", self._cfg.right_joint_names)
+
+        self._left_pub = self.create_publisher(
+            JointState, self._cfg.left_command_topic, qos_profile_sensor_data
+        )
+        self._right_pub = self.create_publisher(
+            JointState, self._cfg.right_command_topic, qos_profile_sensor_data
+        )
+        self.create_subscription(
+            JointState,
+            self._cfg.left_feedback_topic,
+            lambda msg: self._on_feedback(self._left, msg),
+            qos_profile_sensor_data,
+        )
+        self.create_subscription(
+            JointState,
+            self._cfg.right_feedback_topic,
+            lambda msg: self._on_feedback(self._right, msg),
+            qos_profile_sensor_data,
+        )
+        self.create_service(SetBool, "~/set_enabled", self._set_enabled)
+
+        self.create_timer(1.0 / self._cfg.control_rate_hz, self._control)
+        self.get_logger().info(
+            f"vive_marvin_teleop ready: enabled={self._enabled}, "
+            f"config={self._config_path}, rate={self._cfg.control_rate_hz:.1f} Hz"
+        )
+
+    def _on_feedback(self, arm: ArmState, msg: JointState) -> None:
+        positions = self._extract_positions(msg, arm.joint_names)
+        if positions is None:
+            self._warn_throttled(arm, "feedback_names", "Ignoring feedback with missing joints")
+            return
+        arm.feedback_rad = positions
+        arm.feedback_stamp = Time.from_msg(msg.header.stamp) if msg.header.stamp.sec or msg.header.stamp.nanosec else self.get_clock().now()
+        if arm.last_command_rad is None:
+            arm.last_command_rad = list(positions)
+
+    def _set_enabled(self, request: SetBool.Request, response: SetBool.Response):
+        if request.data:
+            missing = [
+                arm.side
+                for arm in (self._left, self._right)
+                if not self._feedback_fresh(arm)
+            ]
+            if missing:
+                response.success = False
+                response.message = f"fresh feedback missing for: {', '.join(missing)}"
+                return response
+            self._left.last_command_rad = list(self._left.feedback_rad)
+            self._right.last_command_rad = list(self._right.feedback_rad)
+            self._enabled = True
+            response.success = True
+            response.message = "vive marvin teleop enabled"
+        else:
+            self._enabled = False
+            response.success = True
+            response.message = "vive marvin teleop disabled"
+        self.get_logger().info(response.message)
+        return response
+
+    def _control(self) -> None:
+        if not self._enabled:
+            return
+        self._control_arm(
+            self._left,
+            reference_frame=self._cfg.left_reference_frame,
+            target_frame=self._cfg.left_target_frame,
+            zsp_para=self._cfg.left_zsp_para,
+            publisher=self._left_pub,
+        )
+        self._control_arm(
+            self._right,
+            reference_frame=self._cfg.right_reference_frame,
+            target_frame=self._cfg.right_target_frame,
+            zsp_para=self._cfg.right_zsp_para,
+            publisher=self._right_pub,
+        )
+
+    def _control_arm(
+        self,
+        arm: ArmState,
+        reference_frame: str,
+        target_frame: str,
+        zsp_para: list[float],
+        publisher,
+    ) -> None:
+        if not self._feedback_fresh(arm):
+            self._warn_throttled(arm, "feedback_stale", f"{arm.side} feedback stale; skipping command")
+            return
+
+        target = self._lookup_matrix(reference_frame, target_frame)
+        if target is None:
+            self._warn_throttled(
+                arm,
+                "tf_missing",
+                f"TF missing or stale: {reference_frame} -> {target_frame}",
+            )
+            return
+
+        ik = self._ik.solve(
+            side=arm.side,
+            target_matrix_m=target,
+            reference_joints_rad=arm.feedback_rad,
+            zsp_type=self._cfg.zsp_type,
+            zsp_para=zsp_para,
+            zsp_angle_deg=self._cfg.zsp_angle_deg,
+            singular_tolerance_deg=self._cfg.singular_tolerance_deg,
+        )
+        if not ik.success:
+            self._warn_throttled(arm, "ik_failed", f"{arm.side} IK failed: {ik.reason}")
+            return
+
+        target_rad = [float(np.deg2rad(value)) for value in ik.joints_deg]
+        command_rad = self._limit_step(arm, target_rad)
+        if self._cfg.command_publish_on_change_only and arm.last_command_rad == command_rad:
+            return
+        arm.last_command_rad = list(command_rad)
+        publisher.publish(self._make_joint_state(arm.joint_names, command_rad))
+
+    def _lookup_matrix(self, reference_frame: str, target_frame: str) -> Optional[np.ndarray]:
+        try:
+            transform = self._tf_buffer.lookup_transform(reference_frame, target_frame, Time())
+        except (
+            tf2_ros.LookupException,
+            tf2_ros.ConnectivityException,
+            tf2_ros.ExtrapolationException,
+        ):
+            return None
+
+        stamp = Time.from_msg(transform.header.stamp)
+        if transform.header.stamp.sec or transform.header.stamp.nanosec:
+            age = (self.get_clock().now() - stamp).nanoseconds * 1e-9
+            if age > self._cfg.tf_timeout_sec:
+                return None
+        return self._transform_to_matrix(transform)
+
+    def _feedback_fresh(self, arm: ArmState) -> bool:
+        if arm.feedback_rad is None or arm.feedback_stamp is None:
+            return False
+        age = (self.get_clock().now() - arm.feedback_stamp).nanoseconds * 1e-9
+        return age <= self._cfg.feedback_timeout_sec
+
+    def _limit_step(self, arm: ArmState, target_rad: list[float]) -> list[float]:
+        if arm.last_command_rad is None:
+            return list(target_rad)
+        max_step = float(self._cfg.max_joint_step_rad)
+        if max_step <= 0.0:
+            return list(target_rad)
+        current = np.array(arm.last_command_rad, dtype=float)
+        target = np.array(target_rad, dtype=float)
+        delta = np.clip(target - current, -max_step, max_step)
+        return list(current + delta)
+
+    def _make_joint_state(self, joint_names: list[str], positions: list[float]) -> JointState:
+        msg = JointState()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.name = list(joint_names)
+        msg.position = [float(value) for value in positions]
+        return msg
+
+    def _warn_throttled(self, arm: ArmState, key: str, message: str) -> None:
+        now = self.get_clock().now()
+        last = arm.last_warn.get(key)
+        if last is None or (now - last).nanoseconds > 2_000_000_000:
+            arm.last_warn[key] = now
+            self.get_logger().warn(message)
+
+    @staticmethod
+    def _extract_positions(msg: JointState, joint_names: list[str]) -> Optional[list[float]]:
+        if msg.name:
+            by_name = {name: pos for name, pos in zip(msg.name, msg.position)}
+            if any(name not in by_name for name in joint_names):
+                return None
+            return [float(by_name[name]) for name in joint_names]
+        if len(msg.position) < len(joint_names):
+            return None
+        return [float(value) for value in msg.position[: len(joint_names)]]
+
+    @staticmethod
+    def _transform_to_matrix(transform) -> np.ndarray:
+        t = transform.transform
+        matrix = np.eye(4, dtype=float)
+        matrix[:3, :3] = _quaternion_to_matrix(
+            t.rotation.x,
+            t.rotation.y,
+            t.rotation.z,
+            t.rotation.w,
+        )
+        matrix[:3, 3] = [t.translation.x, t.translation.y, t.translation.z]
+        return matrix
+
+
+def _quaternion_to_matrix(x: float, y: float, z: float, w: float) -> np.ndarray:
+    norm = np.sqrt(x * x + y * y + z * z + w * w)
+    if norm <= 0.0:
+        return np.eye(3, dtype=float)
+    x, y, z, w = x / norm, y / norm, z / norm, w / norm
+    return np.array(
+        [
+            [1.0 - 2.0 * (y * y + z * z), 2.0 * (x * y - z * w), 2.0 * (x * z + y * w)],
+            [2.0 * (x * y + z * w), 1.0 - 2.0 * (x * x + z * z), 2.0 * (y * z - x * w)],
+            [2.0 * (x * z - y * w), 2.0 * (y * z + x * w), 1.0 - 2.0 * (x * x + y * y)],
+        ],
+        dtype=float,
+    )
+
+
+def _package_file(*parts: str) -> Path:
+    return Path(get_package_share_directory("vive_marvin_teleop")).joinpath(*parts)
+
+
+def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Vive tracker chest-frame teleop for Marvin")
+    parser.add_argument("--config", default=str(_package_file("config", "vive_marvin_teleop.yaml")))
+    parser.add_argument("--kine-config", default=str(_package_file("config", "ccs_m6.MvKDCfg")))
+    return parser.parse_args(argv)
+
+
+def main(argv: Optional[list[str]] = None) -> int:
+    program_name = sys.argv[0] if sys.argv else "vive_marvin_teleop_node"
+    raw_argv = sys.argv if argv is None else [program_name, *argv]
+    args = _parse_args(remove_ros_args(raw_argv)[1:])
+
+    rclpy.init(args=raw_argv)
+    node = None
+    try:
+        node = ViveMarvinTeleopNode(Path(args.config), Path(args.kine_config))
+        rclpy.spin(node)
+    except (KeyboardInterrupt, ExternalShutdownException):
+        pass
+    finally:
+        if node is not None:
+            try:
+                node.destroy_node()
+            except KeyboardInterrupt:
+                pass
+        if rclpy.ok():
+            try:
+                rclpy.shutdown()
+            except KeyboardInterrupt:
+                pass
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

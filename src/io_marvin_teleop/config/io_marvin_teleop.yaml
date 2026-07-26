@@ -1,0 +1,39 @@
+io_marvin_teleop:
+  control_rate_hz: 60.0
+  auto_enable: false
+  feedback_timeout_sec: 0.5
+  target_timeout_sec: 0.5
+
+  target_pose_topic: "/io_teleop/target_ee_poses"
+  # IO publishes poses[0]=right arm and poses[1]=left arm.
+  pose_order: "right_left"
+
+  # IO targets share the upper-body base frame. Convert them into each Tianji arm base
+  # using the mounts from robot_description/urdf/robot.xacro, then retarget human scale.
+  transform_from_common_base: true
+  position_scale: 0.8
+  left_arm_base_xyz: [0.02201, 0.03725, 0.065]
+  left_arm_base_rpy: [-1.5708, 0.0, 0.0]
+  right_arm_base_xyz: [0.02201, -0.03725, 0.065]
+  right_arm_base_rpy: [1.5708, 0.0, 0.0]
+
+  left_feedback_topic: "/marvin/left/joint_states"
+  right_feedback_topic: "/marvin/right/joint_states"
+  left_command_topic: "/marvin/left/joint_commands"
+  right_command_topic: "/marvin/right/joint_commands"
+
+  left_joint_names: ["Joint1_L", "Joint2_L", "Joint3_L", "Joint4_L", "Joint5_L", "Joint6_L", "Joint7_L"]
+  right_joint_names: ["Joint1_R", "Joint2_R", "Joint3_R", "Joint4_R", "Joint5_R", "Joint6_R", "Joint7_R"]
+
+  # Fixed Tianji IK reference branches, matching marvin_elbow_pose_node targets (degrees).
+  left_ik_reference_deg: [-90.0, 90.0, 90.0, -90.0, 0.0, 0.0, 0.0]
+  right_ik_reference_deg: [90.0, 90.0, -90.0, -90.0, 0.0, 0.0, 0.0]
+
+  zsp_type: 1
+  left_zsp_para: [0.0, -1.0, -0.5, 0.0, 0.0, 0.0]
+  right_zsp_para: [0.0, 1.0, -0.5, 0.0, 0.0, 0.0]
+  zsp_angle_deg: 0.0
+  singular_tolerance_deg: [5.0, 5.0, 5.0]
+
+  max_joint_step_rad: 0.02
+  command_publish_on_change_only: false

@@ -1,0 +1,18 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>io_teleop_bringup</name>
+  <version>0.1.0</version>
+  <description>Standalone launch entry points for IO teleoperation.</description>
+  <maintainer email="intuitionx@example.com">intuitionx</maintainer>
+  <license>Proprietary</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>io_joint_state_bridge</exec_depend>
+  <exec_depend>io_marvin_teleop</exec_depend>
+  <exec_depend>robot_bringup</exec_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

@@ -1,0 +1,22 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>marvin_bringup</name>
+  <version>0.1.0</version>
+  <description>Launch files and configuration for Marvin ROS 2 driver bringup.</description>
+  <maintainer email="todo@example.com">ccs</maintainer>
+  <license>Proprietary</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <exec_depend>marvin_driver</exec_depend>
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>python3-tk</exec_depend>
+  <depend>rclcpp</depend>
+  <depend>sensor_msgs</depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

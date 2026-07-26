@@ -1,0 +1,222 @@
+<?xml version="1.0"?>
+<robot name="robot" xmlns:xacro="http://www.ros.org/wiki/xacro">
+  <xacro:include filename="marvin_left.xacro" />
+  <xacro:include filename="marvin_right.xacro" />
+  <xacro:include filename="wuji_left.xacro" />
+  <xacro:include filename="wuji_right.xacro" />
+  <xacro:include filename="$(find realsense2_description)/urdf/_d435i.urdf.xacro" />
+
+  <xacro:arg name="left_arm_xyz" default="0.02201 0.03725 0.065" />
+  <xacro:arg name="left_arm_rpy" default="-1.5708 0 0" />
+  <xacro:arg name="right_arm_xyz" default="0.02201 -0.03725 0.065" />
+  <xacro:arg name="right_arm_rpy" default="1.5708 0 0" />
+  <xacro:arg name="left_hand_xyz" default="0 -0.1 0" />
+  <xacro:arg name="left_hand_rpy" default="1.5708 1.5708 0" />
+  <xacro:arg name="right_hand_xyz" default="0 -0.1 0" />
+  <xacro:arg name="right_hand_rpy" default="1.5708 0 0" />
+  <xacro:arg name="left_camera_adapter_xyz" default="0 -0.1 0" />
+  <xacro:arg name="left_camera_adapter_rpy" default="0.785398 0 -1.5708" />
+  <xacro:arg name="right_camera_adapter_xyz" default="0 -0.1 0" />
+  <xacro:arg name="right_camera_adapter_rpy" default="-0.785398 0 -1.5708" />
+  <xacro:arg name="head_camera_xyz" default="0.30 0.0070867 1.4" />
+  <xacro:arg name="head_camera_rpy" default="0 1.047198 0" />
+  <xacro:arg name="left_wrist_camera_xyz" default="0.01137 0.00 0.0885" />
+  <xacro:arg name="left_wrist_camera_rpy" default="0 0.785398 0" />
+  <xacro:arg name="right_wrist_camera_xyz" default="0.01137 0.0 0.0885" />
+  <xacro:arg name="right_wrist_camera_rpy" default="0 0.785398 0" />
+
+  <xacro:macro name="wuji_docking" params="prefix">
+    <link name="${prefix}_hand_docking_link">
+      <inertial>
+        <origin xyz="0.0 0.000613 0.008094" rpy="0 0 0" />
+        <mass value="0.051956" />
+        <inertia
+          ixx="1.814727e-05"
+          ixy="-2.035277e-10"
+          ixz="8.570371e-11"
+          iyy="1.736668e-05"
+          iyz="-4.906137e-07"
+          izz="1.920788e-05" />
+      </inertial>
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0" />
+        <geometry>
+          <mesh filename="package://robot_description/meshes/hand_docking_link.STL" />
+        </geometry>
+        <material name="">
+          <color rgba="0.792156862745098 0.819607843137255 0.933333333333333 1" />
+        </material>
+      </visual>
+      <collision>
+        <origin xyz="0 0 0" rpy="0 0 0" />
+        <geometry>
+          <mesh filename="package://robot_description/meshes/hand_docking_link.STL" />
+        </geometry>
+      </collision>
+    </link>
+  </xacro:macro>
+
+  <xacro:macro name="camera_adapter" params="prefix">
+    <link name="${prefix}_camera_adapter_link">
+      <inertial>
+        <origin xyz="0.008437 0 0.042705" rpy="0 0 0" />
+        <mass value="0.05" />
+        <inertia
+          ixx="1.104e-04"
+          ixy="0"
+          ixz="0"
+          iyy="9.298e-05"
+          iyz="0"
+          izz="2.343e-05" />
+      </inertial>
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0" />
+        <geometry>
+          <mesh filename="package://robot_description/meshes/camera_adapter_link.STL" />
+        </geometry>
+        <material name="">
+          <color rgba="0.55 0.55 0.55 1" />
+        </material>
+      </visual>
+      <collision>
+        <origin xyz="0 0 0" rpy="0 0 0" />
+        <geometry>
+          <mesh filename="package://robot_description/meshes/camera_adapter_link.STL" />
+        </geometry>
+      </collision>
+    </link>
+  </xacro:macro>
+
+  <link name="base_link">
+    <inertial>
+      <origin xyz="0.019535879789454 -0.00155643421780804 0.215131156945254" rpy="0 0 0" />
+      <mass value="76.7121781204956" />
+      <inertia
+        ixx="1.89167840103853"
+        ixy="1.68922457076388E-05"
+        ixz="0.0146214759473055"
+        iyy="2.26695150374495"
+        iyz="-0.000157897841599557"
+        izz="2.26460805565594" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="package://robot_description/meshes/base_link.STL" />
+      </geometry>
+      <material name="">
+        <color rgba="1 1 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="package://robot_description/meshes/base_link.STL" />
+      </geometry>
+    </collision>
+  </link>
+
+  <link name="lift_platform_link">
+    <inertial>
+      <origin xyz="0.00304061511493919 0 0.0650000000000002" rpy="0 0 0" />
+      <mass value="2.05736282450439" />
+      <inertia
+        ixx="0.00557455728848934"
+        ixy="-5.98328104491412E-19"
+        ixz="-8.52857618622784E-18"
+        iyy="0.00984728397591123"
+        iyz="3.66863177774555E-21"
+        izz="0.00828511749726334" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="package://robot_description/meshes/lift_platform_link.STL" />
+      </geometry>
+      <material name="">
+        <color rgba="0.776470588235294 0.756862745098039 0.737254901960784 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="package://robot_description/meshes/lift_platform_link.STL" />
+      </geometry>
+    </collision>
+  </link>
+
+  <joint name="base_to_lift_platform" type="fixed">
+    <origin xyz="0.29899 8.6662E-05 1.0124" rpy="0 0 0" />
+    <parent link="base_link" />
+    <child link="lift_platform_link" />
+  </joint>
+
+  <xacro:marvin_left />
+  <xacro:marvin_right />
+  <xacro:wuji_left />
+  <xacro:wuji_right />
+  <xacro:wuji_docking prefix="left" />
+  <xacro:wuji_docking prefix="right" />
+  <xacro:camera_adapter prefix="left" />
+  <xacro:camera_adapter prefix="right" />
+
+  <joint name="main_base_to_marvin_left" type="fixed">
+    <origin xyz="$(arg left_arm_xyz)" rpy="$(arg left_arm_rpy)" />
+    <parent link="lift_platform_link" />
+    <child link="Base_L" />
+  </joint>
+
+  <joint name="main_base_to_marvin_right" type="fixed">
+    <origin xyz="$(arg right_arm_xyz)" rpy="$(arg right_arm_rpy)" />
+    <parent link="lift_platform_link" />
+    <child link="Base_R" />
+  </joint>
+
+  <joint name="marvin_left_to_wuji_left_docking" type="fixed">
+    <origin xyz="$(arg left_hand_xyz)" rpy="$(arg left_hand_rpy)" />
+    <parent link="Link7_L" />
+    <child link="left_hand_docking_link" />
+  </joint>
+
+  <joint name="marvin_left_to_camera_adapter" type="fixed">
+    <origin xyz="$(arg left_camera_adapter_xyz)" rpy="$(arg left_camera_adapter_rpy)" />
+    <parent link="Link7_L" />
+    <child link="left_camera_adapter_link" />
+  </joint>
+
+  <joint name="wuji_left_docking_to_wuji_left" type="fixed">
+    <origin xyz="0 0 0.05" rpy="0 0 -0.785398" />
+    <parent link="left_hand_docking_link" />
+    <child link="left_palm_link" />
+  </joint>
+
+  <joint name="marvin_right_to_wuji_right_docking" type="fixed">
+    <origin xyz="$(arg right_hand_xyz)" rpy="$(arg right_hand_rpy)" />
+    <parent link="Link7_R" />
+    <child link="right_hand_docking_link" />
+  </joint>
+
+  <joint name="marvin_right_to_camera_adapter" type="fixed">
+    <origin xyz="$(arg right_camera_adapter_xyz)" rpy="$(arg right_camera_adapter_rpy)" />
+    <parent link="Link7_R" />
+    <child link="right_camera_adapter_link" />
+  </joint>
+
+  <joint name="wuji_right_docking_to_wuji_right" type="fixed">
+    <origin xyz="0 0 0.05" rpy="0 0 -0.785398" />
+    <parent link="right_hand_docking_link" />
+    <child link="right_palm_link" />
+  </joint>
+
+  <xacro:sensor_d435i parent="base_link" name="head_camera" use_nominal_extrinsics="true">
+    <origin xyz="$(arg head_camera_xyz)" rpy="$(arg head_camera_rpy)" />
+  </xacro:sensor_d435i>
+
+  <xacro:sensor_d435i parent="left_camera_adapter_link" name="left_wrist_camera" use_nominal_extrinsics="true">
+    <origin xyz="$(arg left_wrist_camera_xyz)" rpy="$(arg left_wrist_camera_rpy)" />
+  </xacro:sensor_d435i>
+
+  <xacro:sensor_d435i parent="right_camera_adapter_link" name="right_wrist_camera" use_nominal_extrinsics="true">
+    <origin xyz="$(arg right_wrist_camera_xyz)" rpy="$(arg right_wrist_camera_rpy)" />
+  </xacro:sensor_d435i>
+</robot>

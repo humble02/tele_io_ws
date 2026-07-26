@@ -1,0 +1,7 @@
+#!/usr/bin/env python3
+
+from vive_marvin_teleop.io_pose_teleop import main
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
