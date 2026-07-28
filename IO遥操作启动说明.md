@@ -28,28 +28,7 @@ source install/setup.bash
 
 ## 2. 直接使用 joint_cmd
 
-### 2.1 数据链路
-
-```text
-IO
-  -> /io_teleop/joint_cmd
-  -> io_joint_state_bridge
-  -> /marvin/right/joint_commands
-     /marvin/left/joint_commands
-  -> Marvin 驱动或 dummy_driver
-```
-
-手部命令链路为：
-
-```text
-/io_teleop/joint_cmd_finger_left
-  -> /hand_left/joint_commands
-
-/io_teleop/joint_cmd_finger_right
-  -> /hand_right/joint_commands
-```
-
-### 2.2 仿真启动
+### 2.1 仿真启动
 
 终端 1 启动 dummy 机器人、机器人模型和 RViz：
 
@@ -57,7 +36,13 @@ IO
 ros2 launch robot_bringup bringup_dummy.launch.py
 ```
 
-终端 2 启动 IO bridge：
+终端 2 使机械臂恢复默认姿态：
+
+```bash
+ros2 launch robot_bringup marvin_elbow_pose.launch.py
+```
+
+终端 3 启动 IO bridge：
 
 ```bash
 ros2 launch io_joint_state_bridge io_joint_state_bridge.launch.py
@@ -65,7 +50,7 @@ ros2 launch io_joint_state_bridge io_joint_state_bridge.launch.py
 
 此时 IO 端可以发布 `/io_teleop/joint_cmd`。bridge 会将左右机械臂命令拆分后发送给 dummy driver。
 
-### 2.3 真机启动
+### 2.2 真机启动
 
 终端 1 启动真实机器人驱动：
 
@@ -74,65 +59,35 @@ ros2 launch robot_bringup bringup_real.launch.py \
   robot_ip:=192.168.1.190
 ```
 
-终端 2 启动 IO bridge：
+终端 2 使机械臂恢复默认姿态：
+
+```bash
+ros2 launch robot_bringup marvin_elbow_pose.launch.py
+```
+
+终端 3 启动 IO bridge：
 
 ```bash
 ros2 launch io_joint_state_bridge io_joint_state_bridge.launch.py
 ```
 
-直接关节角模式不需要启动 `io_marvin_teleop`。
-
-### 2.4 joint_cmd 消息格式
-
-话题和消息类型：
-
-```text
-Topic: /io_teleop/joint_cmd
-Type:  sensor_msgs/msg/JointState
-```
-
-推荐在 `name` 中携带完整关节名称，这样 bridge 会按照名称提取左右机械臂数据。
-
-如果 `name` 为空，`position` 必须至少包含 14 个关节角，固定顺序为：
-
-```text
-Joint1_R, Joint2_R, Joint3_R, Joint4_R, Joint5_R, Joint6_R, Joint7_R,
-Joint1_L, Joint2_L, Joint3_L, Joint4_L, Joint5_L, Joint6_L, Joint7_L
-```
-
-`JointState.position` 中的关节角单位为弧度。
-
-可以使用以下命令检查转发结果：
-
-```bash
-ros2 topic echo /io_teleop/joint_cmd
-ros2 topic echo /marvin/right/joint_commands
-ros2 topic echo /marvin/left/joint_commands
-```
-
-bridge 还会将机械臂和手部反馈组合后发布到：
-
 ```text
 /io_teleop/joint_states
 ```
 
-## 3. 使用 target_ee_poses 和天机 SDK IK
+清错：
 
-### 3.1 数据链路
-
-```text
-IO
-  -> /io_teleop/target_ee_poses
-  -> io_marvin_teleop
-  -> 天机 SDK 逆运动学解算
-  -> /marvin/right/joint_commands
-     /marvin/left/joint_commands
-  -> Marvin 驱动或 dummy_driver
+```bash
+ros2 run marvin_driver marvin_link_check_node --ros-args \
+  -p robot_ip:=192.168.1.190 \
+  -p clear_errors:=true \
+  -p frame_samples:=20 \
+  -p sample_period_ms:=20
 ```
 
-`io_marvin_teleop` 直接订阅左右机械臂反馈，并将 SDK 解算结果作为关节命令发布。SDK 内部输出角度制结果，节点在发布前会转换成 ROS 使用的弧度制。
+## 3. 使用 target_ee_poses 和天机 SDK IK
 
-### 3.2 仿真一键启动
+### 3.1 仿真一键启动
 
 ```bash
 ros2 launch io_teleop_bringup io_teleop_sim.launch.py
@@ -171,31 +126,7 @@ ros2 launch robot_bringup marvin_elbow_pose.launch.py
 
 在 `joint_cmd` 模式中，外部 `robot_control_pid_node` 会持续覆盖这个脚本的输出；此时需要先停止原 PID 控制链路。
 
-### 3.3 target_ee_poses 消息格式
-
-话题和消息类型：
-
-```text
-Topic: /io_teleop/target_ee_poses
-Type:  geometry_msgs/msg/PoseArray
-```
-
-当前配置要求至少包含两个末端位姿，顺序为：
-
-```text
-poses[0] = 右臂末端位姿
-poses[1] = 左臂末端位姿
-```
-
-位置单位为米，姿态使用四元数。当前节点假设两个位姿位于共同的机器人上身基座坐标系中，并根据配置转换到左右机械臂各自的基座坐标系。
-
-目标位置还会应用当前配置中的缩放系数：
-
-```yaml
-position_scale: 0.8
-```
-
-### 3.4 启用 IK 控制
+### 3.2 启用 IK 控制
 
 `io_marvin_teleop` 启动后默认处于禁用状态，不会立即发送运动命令。
 
@@ -237,7 +168,7 @@ ros2 service call /io_marvin_teleop/set_enabled \
   std_srvs/srv/SetBool "{data: false}"
 ```
 
-### 3.5 真机一键启动
+### 3.3 真机一键启动
 
 ```bash
 ros2 launch io_teleop_bringup io_teleop_real.launch.py \

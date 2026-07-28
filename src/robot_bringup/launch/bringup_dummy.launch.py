@@ -10,7 +10,7 @@ from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
 sys.path.insert(0, os.path.dirname(__file__))
-from common import append_visualization_nodes
+from robot_bringup_common import append_visualization_nodes
 
 
 def launch_setup(context, *args, **kwargs):

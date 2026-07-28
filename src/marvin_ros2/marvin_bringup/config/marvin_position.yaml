@@ -5,8 +5,8 @@
     auto_connect: true
     arms: "both"
     control_mode: "position"
-    velocity_ratio: 10
-    acceleration_ratio: 10
+    velocity_ratio: 100
+    acceleration_ratio: 100
     feedback_rate_hz: 1000.0
     watchdog_rate_hz: 5.0
     command_timeout_sec: 0.5

@@ -11,7 +11,7 @@ from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.substitutions import FindPackageShare
 
 sys.path.insert(0, os.path.dirname(__file__))
-from common import append_visualization_nodes
+from robot_bringup_common import append_visualization_nodes
 
 
 def marvin_bringup_include() -> IncludeLaunchDescription:
@@ -68,14 +68,14 @@ def generate_launch_description() -> LaunchDescription:
             DeclareLaunchArgument("rviz", default_value="true"),
             DeclareLaunchArgument("publish_rate_hz", default_value="50.0"),
             DeclareLaunchArgument("stale_timeout_sec", default_value="0.0"),
-            DeclareLaunchArgument("marvin_launch", default_value="marvin_position.launch.py"),
+            DeclareLaunchArgument("marvin_launch", default_value="marvin_impedance_pd.launch.py"),
             DeclareLaunchArgument("marvin_namespace", default_value="marvin"),
             DeclareLaunchArgument("robot_ip", default_value="192.168.1.190"),
             DeclareLaunchArgument("arms", default_value="both"),
             DeclareLaunchArgument("hands", default_value="true"),
             DeclareLaunchArgument("auto_connect", default_value="true"),
-            DeclareLaunchArgument("velocity_ratio", default_value="10"),
-            DeclareLaunchArgument("acceleration_ratio", default_value="10"),
+            DeclareLaunchArgument("velocity_ratio", default_value="100"),
+            DeclareLaunchArgument("acceleration_ratio", default_value="100"),
             DeclareLaunchArgument("marvin_feedback_rate_hz", default_value="1000.0"),
             DeclareLaunchArgument("hand_publish_rate", default_value="1000.0"),
             DeclareLaunchArgument("hand_filter_cutoff_freq", default_value="10.0"),
