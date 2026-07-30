@@ -21,13 +21,7 @@ IO_COMMAND_JOINT_NAMES = [
     "Joint6_L",
     "Joint7_L",
 ]
-LEFT_HAND_JOINT_NAMES = [
-    f"left_finger{finger}_joint{joint}" for finger in range(1, 6) for joint in range(1, 5)
-]
-RIGHT_HAND_JOINT_NAMES = [
-    f"right_finger{finger}_joint{joint}" for finger in range(1, 6) for joint in range(1, 5)
-]
-IO_STATE_JOINT_NAMES = IO_COMMAND_JOINT_NAMES + LEFT_HAND_JOINT_NAMES + RIGHT_HAND_JOINT_NAMES
+IO_STATE_JOINT_NAMES = IO_COMMAND_JOINT_NAMES
 
 
 def generate_launch_description() -> LaunchDescription:
@@ -35,7 +29,6 @@ def generate_launch_description() -> LaunchDescription:
         [
             DeclareLaunchArgument("publish_rate_hz", default_value="1000.0"),
             DeclareLaunchArgument("require_both_feedback", default_value="true"),
-            DeclareLaunchArgument("require_hand_feedback", default_value="false"),
             DeclareLaunchArgument("forward_arm_commands", default_value="true"),
             DeclareLaunchArgument("io_state_topic", default_value="/io_teleop/joint_states"),
             DeclareLaunchArgument("io_command_topic", default_value="/io_teleop/joint_cmd"),
@@ -49,10 +42,12 @@ def generate_launch_description() -> LaunchDescription:
             ),
             DeclareLaunchArgument("left_state_topic", default_value="/marvin/left/joint_states"),
             DeclareLaunchArgument("right_state_topic", default_value="/marvin/right/joint_states"),
-            DeclareLaunchArgument("left_hand_state_topic", default_value="/hand_left/joint_states"),
-            DeclareLaunchArgument("right_hand_state_topic", default_value="/hand_right/joint_states"),
-            DeclareLaunchArgument("left_command_topic", default_value="/marvin/left/joint_commands"),
-            DeclareLaunchArgument("right_command_topic", default_value="/marvin/right/joint_commands"),
+            DeclareLaunchArgument(
+                "left_command_topic", default_value="/marvin/left/joint_commands"
+            ),
+            DeclareLaunchArgument(
+                "right_command_topic", default_value="/marvin/right/joint_commands"
+            ),
             DeclareLaunchArgument(
                 "left_hand_command_topic", default_value="/hand_left/joint_commands"
             ),
@@ -73,9 +68,6 @@ def generate_launch_description() -> LaunchDescription:
                         "require_both_feedback": ParameterValue(
                             LaunchConfiguration("require_both_feedback"), value_type=bool
                         ),
-                        "require_hand_feedback": ParameterValue(
-                            LaunchConfiguration("require_hand_feedback"), value_type=bool
-                        ),
                         "forward_arm_commands": ParameterValue(
                             LaunchConfiguration("forward_arm_commands"), value_type=bool
                         ),
@@ -91,8 +83,6 @@ def generate_launch_description() -> LaunchDescription:
                         ),
                         "left_state_topic": LaunchConfiguration("left_state_topic"),
                         "right_state_topic": LaunchConfiguration("right_state_topic"),
-                        "left_hand_state_topic": LaunchConfiguration("left_hand_state_topic"),
-                        "right_hand_state_topic": LaunchConfiguration("right_hand_state_topic"),
                         "left_command_topic": LaunchConfiguration("left_command_topic"),
                         "right_command_topic": LaunchConfiguration("right_command_topic"),
                         "left_hand_command_topic": LaunchConfiguration(

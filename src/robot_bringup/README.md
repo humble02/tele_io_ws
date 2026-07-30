@@ -74,12 +74,11 @@ Start the IO compatibility bridge after either dummy or real Marvin bringup:
 ros2 launch robot_bringup io_joint_state_bridge.launch.py
 ```
 
-The bridge publishes Marvin arm feedback plus Wuji hand feedback as one
-54-joint `sensor_msgs/msg/JointState`:
+The bridge publishes the 14 Marvin arm joints as one
+`sensor_msgs/msg/JointState`. It does not subscribe to Wuji hand feedback:
 
 ```text
 /marvin/left/joint_states + /marvin/right/joint_states
-  + /hand_left/joint_states + /hand_right/joint_states
   -> /io_teleop/joint_states
 ```
 
@@ -91,9 +90,9 @@ It also forwards arm and hand `sensor_msgs/msg/JointState` commands:
 /io_teleop/joint_cmd_finger_right -> /hand_right/joint_commands
 ```
 
-The default IO state order is `Joint1_R` through `Joint7_R`, `Joint1_L` through
-`Joint7_L`, then the 20 left-hand joints and 20 right-hand joints. The bridge maps
-commands by joint name when the incoming `JointState.name` field is populated.
+The default IO state order is `Joint1_R` through `Joint7_R`, then `Joint1_L`
+through `Joint7_L`. The bridge maps commands by joint name when the incoming
+`JointState.name` field is populated.
 For unnamed commands, `io_command_joint_names` defines the arm positional order;
 hand commands use the default 20-joint order for the corresponding hand.
 

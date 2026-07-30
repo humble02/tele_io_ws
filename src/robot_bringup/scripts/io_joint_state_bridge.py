@@ -23,12 +23,8 @@ RIGHT_HAND_JOINT_NAMES = [
     f"right_finger{finger}_joint{joint}" for finger in range(1, 6) for joint in range(1, 5)
 ]
 ARM_JOINT_NAMES = LEFT_JOINT_NAMES + RIGHT_JOINT_NAMES
-HAND_JOINT_NAMES = LEFT_HAND_JOINT_NAMES + RIGHT_HAND_JOINT_NAMES
-STATE_JOINT_NAMES = ARM_JOINT_NAMES + HAND_JOINT_NAMES
 DEFAULT_IO_COMMAND_JOINT_NAMES = RIGHT_JOINT_NAMES + LEFT_JOINT_NAMES
-DEFAULT_IO_STATE_JOINT_NAMES = (
-    RIGHT_JOINT_NAMES + LEFT_JOINT_NAMES + LEFT_HAND_JOINT_NAMES + RIGHT_HAND_JOINT_NAMES
-)
+DEFAULT_IO_STATE_JOINT_NAMES = RIGHT_JOINT_NAMES + LEFT_JOINT_NAMES
 
 
 @dataclass
@@ -48,7 +44,6 @@ class IoJointStateBridge(Node):
 
         self.declare_parameter("publish_rate_hz", 1000.0)
         self.declare_parameter("require_both_feedback", True)
-        self.declare_parameter("require_hand_feedback", False)
         self.declare_parameter("io_joint_names", DEFAULT_IO_COMMAND_JOINT_NAMES)
         self.declare_parameter("io_command_joint_names", DEFAULT_IO_COMMAND_JOINT_NAMES)
         self.declare_parameter("io_state_joint_names", DEFAULT_IO_STATE_JOINT_NAMES)
@@ -62,8 +57,6 @@ class IoJointStateBridge(Node):
         )
         self.declare_parameter("left_state_topic", "/marvin/left/joint_states")
         self.declare_parameter("right_state_topic", "/marvin/right/joint_states")
-        self.declare_parameter("left_hand_state_topic", "/hand_left/joint_states")
-        self.declare_parameter("right_hand_state_topic", "/hand_right/joint_states")
         self.declare_parameter("left_command_topic", "/marvin/left/joint_commands")
         self.declare_parameter("right_command_topic", "/marvin/right/joint_commands")
         self.declare_parameter("left_hand_command_topic", "/hand_left/joint_commands")
@@ -74,7 +67,6 @@ class IoJointStateBridge(Node):
             raise ValueError(f"publish_rate_hz must be > 0, got {self._publish_rate_hz}")
 
         self._require_both_feedback = bool(self.get_parameter("require_both_feedback").value)
-        self._require_hand_feedback = bool(self.get_parameter("require_hand_feedback").value)
         self._io_command_joint_names = list(
             self.get_parameter("io_command_joint_names")
             .get_parameter_value()
@@ -99,8 +91,6 @@ class IoJointStateBridge(Node):
         )
         self._left_state_topic = str(self.get_parameter("left_state_topic").value)
         self._right_state_topic = str(self.get_parameter("right_state_topic").value)
-        self._left_hand_state_topic = str(self.get_parameter("left_hand_state_topic").value)
-        self._right_hand_state_topic = str(self.get_parameter("right_hand_state_topic").value)
         self._left_command_topic = str(self.get_parameter("left_command_topic").value)
         self._right_command_topic = str(self.get_parameter("right_command_topic").value)
         self._left_hand_command_topic = str(
@@ -121,18 +111,6 @@ class IoJointStateBridge(Node):
             position=[0.0] * len(RIGHT_JOINT_NAMES),
             velocity=[0.0] * len(RIGHT_JOINT_NAMES),
             effort=[0.0] * len(RIGHT_JOINT_NAMES),
-        )
-        self._left_hand = JointCache(
-            names=LEFT_HAND_JOINT_NAMES,
-            position=[0.0] * len(LEFT_HAND_JOINT_NAMES),
-            velocity=[0.0] * len(LEFT_HAND_JOINT_NAMES),
-            effort=[0.0] * len(LEFT_HAND_JOINT_NAMES),
-        )
-        self._right_hand = JointCache(
-            names=RIGHT_HAND_JOINT_NAMES,
-            position=[0.0] * len(RIGHT_HAND_JOINT_NAMES),
-            velocity=[0.0] * len(RIGHT_HAND_JOINT_NAMES),
-            effort=[0.0] * len(RIGHT_HAND_JOINT_NAMES),
         )
 
         self._io_state_pub = self.create_publisher(
@@ -161,18 +139,6 @@ class IoJointStateBridge(Node):
             JointState,
             self._right_state_topic,
             lambda msg: self._on_arm_state(self._right, msg, self._right_state_topic),
-            qos_profile_sensor_data,
-        )
-        self.create_subscription(
-            JointState,
-            self._left_hand_state_topic,
-            lambda msg: self._on_arm_state(self._left_hand, msg, self._left_hand_state_topic),
-            qos_profile_sensor_data,
-        )
-        self.create_subscription(
-            JointState,
-            self._right_hand_state_topic,
-            lambda msg: self._on_arm_state(self._right_hand, msg, self._right_hand_state_topic),
             qos_profile_sensor_data,
         )
         self.create_subscription(
@@ -207,8 +173,7 @@ class IoJointStateBridge(Node):
         self.create_timer(1.0 / self._publish_rate_hz, self._publish_io_state)
         self.get_logger().info(
             "io_joint_state_bridge ready: "
-            f"{self._left_state_topic}+{self._right_state_topic}+"
-            f"{self._left_hand_state_topic}+{self._right_hand_state_topic} "
+            f"{self._left_state_topic}+{self._right_state_topic} "
             f"-> {self._io_state_topic}, "
             f"{self._io_command_topic} -> {self._left_command_topic}+{self._right_command_topic}, "
             f"{self._io_left_hand_command_topic} -> {self._left_hand_command_topic}, "
@@ -231,11 +196,6 @@ class IoJointStateBridge(Node):
     def _publish_io_state(self) -> None:
         if self._require_both_feedback and (not self._left.received or not self._right.received):
             return
-        if self._require_hand_feedback and (
-            not self._left_hand.received or not self._right_hand.received
-        ):
-            return
-
         msg = JointState()
         msg.header.stamp = self.get_clock().now().to_msg()
         position_by_name = self._cache_values_by_name("position")
@@ -360,17 +320,18 @@ class IoJointStateBridge(Node):
 
     @staticmethod
     def _validate_io_state_joint_names(joint_names: list[str]) -> None:
-        if len(joint_names) != len(STATE_JOINT_NAMES):
+        if len(joint_names) != len(ARM_JOINT_NAMES):
             raise ValueError(
-                f"io_state_joint_names must contain 54 arm+hand joints, got {len(joint_names)}"
+                f"io_state_joint_names must contain 14 arm joints, got {len(joint_names)}"
             )
-        if set(joint_names) != set(STATE_JOINT_NAMES):
+        if set(joint_names) != set(ARM_JOINT_NAMES):
             raise ValueError(
-                "io_state_joint_names must contain Marvin arm joints and Wuji hand joints"
+                "io_state_joint_names must contain exactly "
+                "Joint1_L..Joint7_L and Joint1_R..Joint7_R"
             )
 
     def _state_caches(self) -> list[JointCache]:
-        return [self._left, self._right, self._left_hand, self._right_hand]
+        return [self._left, self._right]
 
     def _extract_by_names(
         self,

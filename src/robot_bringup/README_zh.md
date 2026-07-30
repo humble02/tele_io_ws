@@ -70,12 +70,11 @@ ros2 launch robot_bringup bringup_dummy.launch.py
 ros2 launch robot_bringup io_joint_state_bridge.launch.py
 ```
 
-该节点把 Marvin 机械臂反馈和 Wuji 手部反馈合成一个 54 关节
-`sensor_msgs/msg/JointState`：
+该节点把 Marvin 双臂的 14 个关节反馈合成一个
+`sensor_msgs/msg/JointState`，不订阅 Wuji 手部反馈：
 
 ```text
 /marvin/left/joint_states + /marvin/right/joint_states
-  + /hand_left/joint_states + /hand_right/joint_states
   -> /io_teleop/joint_states
 ```
 
@@ -87,9 +86,9 @@ ros2 launch robot_bringup io_joint_state_bridge.launch.py
 /io_teleop/joint_cmd_finger_right -> /hand_right/joint_commands
 ```
 
-默认 IO state 顺序为 `Joint1_R` 到 `Joint7_R`、`Joint1_L` 到 `Joint7_L`，
-然后 20 个左手关节和 20 个右手关节。如果输入的 `JointState.name` 字段非空，
-桥接节点会按关节名称映射命令。没有 `name` 字段时，双臂按
+默认 IO state 顺序为 `Joint1_R` 到 `Joint7_R`，然后是 `Joint1_L` 到
+`Joint7_L`。如果输入的 `JointState.name` 字段非空，桥接节点会按关节名称映射命令。
+没有 `name` 字段时，双臂按
 `io_command_joint_names` 参数定义的位置顺序解析，手部按对应手的 20 个关节默认
 顺序解析。
 
