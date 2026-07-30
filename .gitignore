@@ -4,3 +4,8 @@ log/
 __pycache__/
 *.py[cod]
 
+# ROS 2 bag recordings
+*.db3
+*.mcap
+/io_joint_latency_*/
+/io_stutter_debug_*/

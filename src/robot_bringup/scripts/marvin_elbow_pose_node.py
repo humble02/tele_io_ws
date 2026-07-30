@@ -17,8 +17,8 @@ from sensor_msgs.msg import JointState
 
 LEFT_JOINT_NAMES = [f"Joint{index}_L" for index in range(1, 8)]
 RIGHT_JOINT_NAMES = [f"Joint{index}_R" for index in range(1, 8)]
-LEFT_ELBOW_TARGET_DEG = [-90.0, 90.0, 90.0, -90.0, 0.0, 0.0, 0.0]
-RIGHT_ELBOW_TARGET_DEG = [90.0, 90.0, -90.0, -90.0, 0.0, 0.0, 0.0]
+LEFT_ELBOW_TARGET_DEG = [-90.0, 80.0, 100.0, -90.0, 0.0, 0.0, 0.0]
+RIGHT_ELBOW_TARGET_DEG = [90.0, 80.0, -100.0, -90.0, 0.0, 0.0, 0.0]
 
 
 @dataclass

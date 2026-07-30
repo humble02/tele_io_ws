@@ -11,8 +11,8 @@
     watchdog_rate_hz: 5.0
     command_timeout_sec: 0.5
     disable_on_timeout: false
-    joint_impedance_k: [15.0, 15.0, 15.0, 8.6, 3.0, 3.0, 3.0]
-    joint_impedance_d: [0.1, 0.1, 0.1, 0.2, 0.5, 0.5, 0.5]
+    joint_impedance_k: [14.0, 14.0, 14.0, 10.5, 5.6, 5.6, 5.6]
+    joint_impedance_d: [0.3, 0.3, 0.3, 0.3, 0.3, 0.3, 0.3]
     left_joint_names:
       - Joint1_L
       - Joint2_L

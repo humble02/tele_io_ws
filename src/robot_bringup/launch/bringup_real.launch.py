@@ -65,10 +65,15 @@ def launch_setup(context, *args, **kwargs):
 def generate_launch_description() -> LaunchDescription:
     return LaunchDescription(
         [
-            DeclareLaunchArgument("rviz", default_value="true"),
+            DeclareLaunchArgument("rviz", default_value="false"),
+            DeclareLaunchArgument(
+                "whole_robot_state",
+                default_value="true",
+                description="Publish global /joint_states and whole-robot TF",
+            ),
             DeclareLaunchArgument("publish_rate_hz", default_value="50.0"),
             DeclareLaunchArgument("stale_timeout_sec", default_value="0.0"),
-            DeclareLaunchArgument("marvin_launch", default_value="marvin_impedance_pd.launch.py"),
+            DeclareLaunchArgument("marvin_launch", default_value="marvin_impedance.launch.py"),
             DeclareLaunchArgument("marvin_namespace", default_value="marvin"),
             DeclareLaunchArgument("robot_ip", default_value="192.168.1.190"),
             DeclareLaunchArgument("arms", default_value="both"),

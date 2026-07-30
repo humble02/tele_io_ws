@@ -72,10 +72,19 @@ def make_rviz_node() -> Node:
 
 
 def append_visualization_nodes(context, nodes: list[Node]) -> list[Node]:
-    nodes.append(make_joint_state_aggregator())
-    nodes.append(make_whole_robot_state_publisher(context))
+    rviz_enabled = LaunchConfiguration("rviz").perform(context).lower() in (
+        "true",
+        "1",
+        "yes",
+    )
+    whole_robot_state_enabled = LaunchConfiguration("whole_robot_state").perform(
+        context
+    ).lower() in ("true", "1", "yes")
 
-    if LaunchConfiguration("rviz").perform(context).lower() in ("true", "1", "yes"):
+    if whole_robot_state_enabled or rviz_enabled:
+        nodes.append(make_joint_state_aggregator())
+        nodes.append(make_whole_robot_state_publisher(context))
+    if rviz_enabled:
         nodes.append(make_rviz_node())
 
     return nodes

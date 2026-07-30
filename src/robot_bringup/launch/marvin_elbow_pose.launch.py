@@ -11,7 +11,7 @@ def generate_launch_description() -> LaunchDescription:
             DeclareLaunchArgument("arms", default_value="both"),
             DeclareLaunchArgument("command_rate_hz", default_value="50.0"),
             DeclareLaunchArgument("hold_before_move_sec", default_value="0.5"),
-            DeclareLaunchArgument("move_duration_sec", default_value="5.0"),
+            DeclareLaunchArgument("move_duration_sec", default_value="1.0"),
             DeclareLaunchArgument("timeout_sec", default_value="30.0"),
             DeclareLaunchArgument("tolerance_rad", default_value="0.02"),
             DeclareLaunchArgument("exit_on_success", default_value="true"),

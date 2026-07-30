@@ -33,7 +33,7 @@ IO_STATE_JOINT_NAMES = IO_COMMAND_JOINT_NAMES + LEFT_HAND_JOINT_NAMES + RIGHT_HA
 def generate_launch_description() -> LaunchDescription:
     return LaunchDescription(
         [
-            DeclareLaunchArgument("publish_rate_hz", default_value="1000.0"),
+            DeclareLaunchArgument("publish_rate_hz", default_value="100.0"),
             DeclareLaunchArgument("require_both_feedback", default_value="true"),
             DeclareLaunchArgument("require_hand_feedback", default_value="false"),
             DeclareLaunchArgument("io_state_topic", default_value="/io_teleop/joint_states"),

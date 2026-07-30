@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from contextlib import suppress
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import List, Optional
 
 import rclpy
 from rclpy._rclpy_pybind11 import RCLError
@@ -40,6 +40,8 @@ class JointCache:
     has_velocity: bool = False
     has_effort: bool = False
     received: bool = False
+    input_names: tuple[str, ...] = ()
+    input_indices: tuple[int, ...] = ()
 
 
 class IoJointStateBridge(Node):
@@ -138,6 +140,21 @@ class IoJointStateBridge(Node):
             velocity=[0.0] * len(RIGHT_HAND_JOINT_NAMES),
             effort=[0.0] * len(RIGHT_HAND_JOINT_NAMES),
         )
+        self._state_caches = (
+            self._left,
+            self._right,
+            self._left_hand,
+            self._right_hand,
+        )
+        cache_by_name = {
+            name: (cache, index)
+            for cache in self._state_caches
+            for index, name in enumerate(cache.names)
+        }
+        self._io_state_layout = [cache_by_name[name] for name in self._io_state_joint_names]
+        self._input_layout_cache: dict[
+            tuple[tuple[str, ...], tuple[str, ...]], tuple[int, ...]
+        ] = {}
 
         self._io_state_pub = self.create_publisher(
             JointState, self._io_state_topic, qos_profile_sensor_data
@@ -225,15 +242,27 @@ class IoJointStateBridge(Node):
         )
 
     def _on_arm_state(self, cache: JointCache, msg: JointState, source: str) -> None:
-        positions = self._extract_by_names(msg, cache.names, source)
+        indices = self._input_indices(cache, msg, source)
+        if indices is None:
+            return
+
+        positions = self._extract_values(msg.position, indices)
         if positions is None:
+            self.get_logger().warn(
+                f"Ignoring JointState from {source}: position array is too short",
+                throttle_duration_sec=1.0,
+            )
             return
 
         cache.position = positions
-        cache.velocity = self._extract_optional_by_names(msg.name, msg.velocity, cache.names)
-        cache.effort = self._extract_optional_by_names(msg.name, msg.effort, cache.names)
-        cache.has_velocity = bool(msg.velocity) and len(cache.velocity) == len(cache.names)
-        cache.has_effort = bool(msg.effort) and len(cache.effort) == len(cache.names)
+        velocity = self._extract_values(msg.velocity, indices) if msg.velocity else None
+        effort = self._extract_values(msg.effort, indices) if msg.effort else None
+        cache.has_velocity = velocity is not None
+        cache.has_effort = effort is not None
+        if velocity is not None:
+            cache.velocity = velocity
+        if effort is not None:
+            cache.effort = effort
         cache.received = True
 
     def _publish_io_state(self) -> None:
@@ -246,16 +275,12 @@ class IoJointStateBridge(Node):
 
         msg = JointState()
         msg.header.stamp = self.get_clock().now().to_msg()
-        position_by_name = self._cache_values_by_name("position")
-        velocity_by_name = self._cache_values_by_name("velocity")
-        effort_by_name = self._cache_values_by_name("effort")
-
         msg.name = list(self._io_state_joint_names)
-        msg.position = [position_by_name[name] for name in self._io_state_joint_names]
-        if all(cache.has_velocity for cache in self._state_caches()):
-            msg.velocity = [velocity_by_name[name] for name in self._io_state_joint_names]
-        if all(cache.has_effort for cache in self._state_caches()):
-            msg.effort = [effort_by_name[name] for name in self._io_state_joint_names]
+        msg.position = [cache.position[index] for cache, index in self._io_state_layout]
+        if all(cache.has_velocity for cache in self._state_caches):
+            msg.velocity = [cache.velocity[index] for cache, index in self._io_state_layout]
+        if all(cache.has_effort for cache in self._state_caches):
+            msg.effort = [cache.effort[index] for cache, index in self._io_state_layout]
 
         try:
             self._io_state_pub.publish(msg)
@@ -350,12 +375,6 @@ class IoJointStateBridge(Node):
             ]
         return named
 
-    def _cache_values_by_name(self, field_name: str) -> dict[str, float]:
-        values = {}
-        for cache in self._state_caches():
-            values.update(dict(zip(cache.names, getattr(cache, field_name))))
-        return values
-
     @staticmethod
     def _validate_io_command_joint_names(joint_names: list[str]) -> None:
         if len(joint_names) != len(ARM_JOINT_NAMES):
@@ -379,8 +398,63 @@ class IoJointStateBridge(Node):
                 "io_state_joint_names must contain Marvin arm joints and Wuji hand joints"
             )
 
-    def _state_caches(self) -> list[JointCache]:
-        return [self._left, self._right, self._left_hand, self._right_hand]
+    def _input_indices(
+        self, cache: JointCache, msg: JointState, source: str
+    ) -> Optional[tuple[int, ...]]:
+        if not msg.name:
+            if len(msg.position) < len(cache.names):
+                self.get_logger().warn(
+                    f"Ignoring unnamed JointState from {source}: expected "
+                    f"{len(cache.names)} positions, got {len(msg.position)}",
+                    throttle_duration_sec=1.0,
+                )
+                return None
+            if len(cache.input_indices) != len(cache.names):
+                cache.input_names = ()
+                cache.input_indices = tuple(range(len(cache.names)))
+            return cache.input_indices
+
+        input_names = tuple(msg.name)
+        if input_names == cache.input_names:
+            return cache.input_indices
+
+        indices = self._indices_from_names(input_names, cache.names)
+        if indices is None:
+            missing_name = next(name for name in cache.names if name not in input_names)
+            self.get_logger().warn(
+                f"Ignoring JointState from {source}: missing joint '{missing_name}'",
+                throttle_duration_sec=1.0,
+            )
+            return None
+
+        cache.input_names = input_names
+        cache.input_indices = indices
+        return indices
+
+    @staticmethod
+    def _extract_values(
+        values: List[float], indices: tuple[int, ...]
+    ) -> Optional[list[float]]:
+        if not values or any(index >= len(values) for index in indices):
+            return None
+        return [float(values[index]) for index in indices]
+
+    def _indices_from_names(
+        self, input_names: tuple[str, ...], expected_names: list[str]
+    ) -> Optional[tuple[int, ...]]:
+        key = input_names, tuple(expected_names)
+        cached = self._input_layout_cache.get(key)
+        if cached is not None:
+            return cached
+
+        index_by_name = {name: index for index, name in enumerate(input_names)}
+        indices = tuple(index_by_name.get(name, -1) for name in expected_names)
+        if any(index < 0 for index in indices):
+            return None
+        if len(self._input_layout_cache) >= 16:
+            self._input_layout_cache.clear()
+        self._input_layout_cache[key] = indices
+        return indices
 
     def _extract_by_names(
         self,
@@ -398,21 +472,25 @@ class IoJointStateBridge(Node):
                 return None
             return [float(value) for value in msg.position[: len(expected_names)]]
 
-        index_by_name: Dict[str, int] = {name: index for index, name in enumerate(msg.name)}
-        values: list[float] = []
-        for name in expected_names:
-            index = index_by_name.get(name)
-            if index is None or index >= len(msg.position):
-                self.get_logger().warn(
-                    f"Ignoring JointState from {source}: missing joint '{name}'",
-                    throttle_duration_sec=1.0,
-                )
-                return None
-            values.append(float(msg.position[index]))
+        input_names = tuple(msg.name)
+        indices = self._indices_from_names(input_names, expected_names)
+        if indices is None:
+            missing_name = next(name for name in expected_names if name not in input_names)
+            self.get_logger().warn(
+                f"Ignoring JointState from {source}: missing joint '{missing_name}'",
+                throttle_duration_sec=1.0,
+            )
+            return None
+        values = self._extract_values(msg.position, indices)
+        if values is None:
+            self.get_logger().warn(
+                f"Ignoring JointState from {source}: position array is too short",
+                throttle_duration_sec=1.0,
+            )
         return values
 
-    @staticmethod
     def _extract_optional_by_names(
+        self,
         names: list[str],
         values: List[float],
         expected_names: list[str],
@@ -424,14 +502,10 @@ class IoJointStateBridge(Node):
                 return [float(value) for value in values[: len(expected_names)]]
             return [0.0] * len(expected_names)
 
-        index_by_name = {name: index for index, name in enumerate(names)}
-        result: list[float] = []
-        for name in expected_names:
-            index = index_by_name.get(name)
-            if index is None or index >= len(values):
-                return [0.0] * len(expected_names)
-            result.append(float(values[index]))
-        return result
+        indices = self._indices_from_names(tuple(names), expected_names)
+        if indices is None:
+            return [0.0] * len(expected_names)
+        return self._extract_values(values, indices) or [0.0] * len(expected_names)
 
 
 def main(args: Optional[List[str]] = None) -> None:
