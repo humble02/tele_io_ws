@@ -68,7 +68,7 @@ ros2 launch robot_bringup marvin_elbow_pose.launch.py
 终端 3 启动 IO bridge：
 
 ```bash
-ros2 launch io_joint_state_bridge io_joint_state_bridge.launch.py
+ros2 launch io_joint_state_bridge io_joint_state_bridge.launch.py     publish_rate_hz:=50.0
 ```
 
 ```text
