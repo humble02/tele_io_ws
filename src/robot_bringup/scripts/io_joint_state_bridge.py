@@ -42,7 +42,7 @@ class IoJointStateBridge(Node):
     def __init__(self) -> None:
         super().__init__("io_joint_state_bridge")
 
-        self.declare_parameter("publish_rate_hz", 1000.0)
+        self.declare_parameter("publish_rate_hz", 50.0)
         self.declare_parameter("require_both_feedback", True)
         self.declare_parameter("io_joint_names", DEFAULT_IO_COMMAND_JOINT_NAMES)
         self.declare_parameter("io_command_joint_names", DEFAULT_IO_COMMAND_JOINT_NAMES)

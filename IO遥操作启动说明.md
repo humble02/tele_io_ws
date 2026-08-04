@@ -45,7 +45,7 @@ ros2 launch robot_bringup marvin_elbow_pose.launch.py
 终端 3 启动 IO bridge：
 
 ```bash
-ros2 launch io_joint_state_bridge io_joint_state_bridge.launch.py
+ros2 launch io_joint_state_bridge io_joint_state_bridge.launch.py     publish_rate_hz:=50.0
 ```
 
 此时 IO 端可以发布 `/io_teleop/joint_cmd`。bridge 会将左右机械臂命令拆分后发送给 dummy driver。
