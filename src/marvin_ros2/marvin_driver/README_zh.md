@@ -104,6 +104,18 @@ SetJointPostionCmd(arm, joint_degrees)
 
 ROS 命令保持弧度制，并在 driver 内部转换。
 
+`velocity_ratio` 和 `acceleration_ratio` 支持在 driver 已连接、机械臂已使能时原子热更新：
+
+```bash
+ros2 param set /marvin/marvin_driver velocity_ratio 50
+ros2 param set /marvin/marvin_driver acceleration_ratio 50
+```
+
+需要两项同时生效的自动化节点应调用
+`/marvin/marvin_driver/set_parameters_atomically`。有效范围都是 `1~100`；driver 会在
+一个 SDK 指令帧中更新所有已配置的手臂，并读取控制器反馈核验。PVT 和拖动模式不受这两个
+限制影响。
+
 ## 启动错误处理
 
 driver 使用 SDK 的简明 `Connect` 函数。旧 SDK 中，`Connect` 内部会调用

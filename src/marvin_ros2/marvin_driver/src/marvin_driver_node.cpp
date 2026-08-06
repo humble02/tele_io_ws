@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "rclcpp/rclcpp.hpp"
+#include "rcl_interfaces/msg/set_parameters_result.hpp"
 #include "sensor_msgs/msg/joint_state.hpp"
 #include "std_srvs/srv/trigger.hpp"
 
@@ -29,7 +30,11 @@ constexpr double kDegToRad = kPi / 180.0;
 constexpr double kRadToDeg = 180.0 / kPi;
 constexpr auto kSdkCallSpacing = std::chrono::milliseconds(2);
 constexpr auto kModeStepSpacing = std::chrono::milliseconds(200);
+constexpr auto kJointLimitVerificationSpacing = std::chrono::milliseconds(10);
 constexpr long kModeResponseTimeoutMs = 1000;
+constexpr int kJointLimitVerificationAttempts = 10;
+constexpr int kMinimumJointLimitRatio = 1;
+constexpr int kMaximumJointLimitRatio = 100;
 constexpr int kPositionState = 1;
 constexpr int kTorqueState = 3;
 constexpr int kJointImpedanceType = 1;
@@ -289,6 +294,77 @@ private:
     watchdog_timer_ = this->create_wall_timer(
       std::chrono::duration<double>(1.0 / std::max(watchdog_rate_hz_, 1.0)),
       std::bind(&MarvinDriverNode::watchdog_tick, this));
+
+    parameter_callback_handle_ = this->add_on_set_parameters_callback(
+      std::bind(&MarvinDriverNode::handle_parameter_update, this, std::placeholders::_1));
+  }
+
+  rcl_interfaces::msg::SetParametersResult handle_parameter_update(
+    const std::vector<rclcpp::Parameter> & parameters)
+  {
+    rcl_interfaces::msg::SetParametersResult result;
+    result.successful = true;
+
+    int requested_velocity_ratio = velocity_ratio_;
+    int requested_acceleration_ratio = acceleration_ratio_;
+    bool joint_limits_changed = false;
+
+    for (const auto & parameter : parameters) {
+      if (parameter.get_name() != "velocity_ratio" &&
+        parameter.get_name() != "acceleration_ratio")
+      {
+        continue;
+      }
+
+      if (parameter.get_type() != rclcpp::ParameterType::PARAMETER_INTEGER) {
+        result.successful = false;
+        result.reason = parameter.get_name() + " must be an integer";
+        return result;
+      }
+
+      const auto value = parameter.as_int();
+      if (value < kMinimumJointLimitRatio || value > kMaximumJointLimitRatio) {
+        result.successful = false;
+        result.reason = parameter.get_name() + " must be in [1, 100]";
+        return result;
+      }
+
+      if (parameter.get_name() == "velocity_ratio") {
+        requested_velocity_ratio = static_cast<int>(value);
+      } else {
+        requested_acceleration_ratio = static_cast<int>(value);
+      }
+      joint_limits_changed = true;
+    }
+
+    if (!joint_limits_changed ||
+      (requested_velocity_ratio == velocity_ratio_ &&
+      requested_acceleration_ratio == acceleration_ratio_))
+    {
+      return result;
+    }
+
+    std::lock_guard<std::mutex> lock(sdk_mutex_);
+    if (!connected_) {
+      result.successful = false;
+      result.reason = "Marvin controller is not connected";
+      return result;
+    }
+    if (!apply_runtime_joint_limits(
+        requested_velocity_ratio, requested_acceleration_ratio))
+    {
+      result.successful = false;
+      result.reason = "controller rejected the runtime joint-limit update";
+      return result;
+    }
+
+    velocity_ratio_ = requested_velocity_ratio;
+    acceleration_ratio_ = requested_acceleration_ratio;
+    RCLCPP_INFO(
+      this->get_logger(),
+      "Updated runtime joint limits: velocity_ratio=%d acceleration_ratio=%d.",
+      velocity_ratio_, acceleration_ratio_);
+    return result;
   }
 
   bool connect_robot()
@@ -444,10 +520,103 @@ private:
 
   bool queue_joint_limit(const ArmRuntime & arm)
   {
+    return queue_joint_limit(arm, velocity_ratio_, acceleration_ratio_);
+  }
+
+  bool queue_joint_limit(
+    const ArmRuntime & arm, const int velocity_ratio, const int acceleration_ratio)
+  {
     if (arm.sdk_arm == 'A') {
-      return OnSetJointLmt_A(velocity_ratio_, acceleration_ratio_);
+      return OnSetJointLmt_A(velocity_ratio, acceleration_ratio);
     }
-    return OnSetJointLmt_B(velocity_ratio_, acceleration_ratio_);
+    return OnSetJointLmt_B(velocity_ratio, acceleration_ratio);
+  }
+
+  bool apply_runtime_joint_limits(const int velocity_ratio, const int acceleration_ratio)
+  {
+    if (!OnClearSet()) {
+      RCLCPP_ERROR(this->get_logger(), "OnClearSet failed before runtime joint-limit update.");
+      return false;
+    }
+    sdk_call_spacing();
+
+    for (const auto & arm : arms_) {
+      if (!arm.enabled) {
+        continue;
+      }
+      if (!queue_joint_limit(arm, velocity_ratio, acceleration_ratio)) {
+        RCLCPP_ERROR(
+          this->get_logger(), "Failed to queue runtime joint limits for %s arm.",
+          arm.side.c_str());
+        return false;
+      }
+      sdk_call_spacing();
+    }
+
+    const auto delay = OnSetSendWaitResponse(kModeResponseTimeoutMs);
+    sdk_call_spacing();
+    if (delay < 0) {
+      RCLCPP_ERROR(
+        this->get_logger(), "Runtime joint-limit update timed out after %ld ms.",
+        kModeResponseTimeoutMs);
+      return false;
+    }
+
+    RCLCPP_INFO(
+      this->get_logger(),
+      "Sent runtime joint limits velocity_ratio=%d acceleration_ratio=%d; response delay=%ld ms.",
+      velocity_ratio, acceleration_ratio, delay);
+    verify_runtime_joint_limits(velocity_ratio, acceleration_ratio);
+    return true;
+  }
+
+  void verify_runtime_joint_limits(const int velocity_ratio, const int acceleration_ratio)
+  {
+    DCSS dcss{};
+    bool received_feedback = false;
+    for (int attempt = 0; attempt < kJointLimitVerificationAttempts; ++attempt) {
+      if (OnGetBuf(&dcss)) {
+        received_feedback = true;
+        bool all_limits_match = true;
+        for (const auto & arm : arms_) {
+          if (!arm.enabled) {
+            continue;
+          }
+          const auto & input = dcss.m_In[arm.sdk_index];
+          all_limits_match = all_limits_match &&
+            static_cast<int>(input.m_Joint_Vel_Ratio) == velocity_ratio &&
+            static_cast<int>(input.m_Joint_Acc_Ratio) == acceleration_ratio;
+        }
+        if (all_limits_match) {
+          for (const auto & arm : arms_) {
+            if (arm.enabled) {
+              log_controller_joint_limit(arm, dcss);
+            }
+          }
+          return;
+        }
+      }
+      std::this_thread::sleep_for(kJointLimitVerificationSpacing);
+    }
+
+    if (!received_feedback) {
+      RCLCPP_WARN(
+        this->get_logger(), "Runtime joint-limit command was acknowledged, but feedback is unavailable.");
+      return;
+    }
+
+    for (const auto & arm : arms_) {
+      if (!arm.enabled) {
+        continue;
+      }
+      const auto & input = dcss.m_In[arm.sdk_index];
+      RCLCPP_WARN(
+        this->get_logger(),
+        "Runtime joint-limit command was acknowledged, but %s arm reports "
+        "velocity_ratio=%d acceleration_ratio=%d (requested %d/%d).",
+        arm.side.c_str(), static_cast<int>(input.m_Joint_Vel_Ratio),
+        static_cast<int>(input.m_Joint_Acc_Ratio), velocity_ratio, acceleration_ratio);
+    }
   }
 
   bool queue_target_state(const ArmRuntime & arm, const int state)
@@ -498,6 +667,11 @@ private:
       return;
     }
 
+    log_controller_joint_limit(arm, dcss);
+  }
+
+  void log_controller_joint_limit(const ArmRuntime & arm, const DCSS & dcss)
+  {
     const auto & input = dcss.m_In[arm.sdk_index];
     RCLCPP_INFO(
       this->get_logger(),
@@ -751,6 +925,7 @@ private:
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr connect_srv_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr release_srv_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr estop_srv_;
+  rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr parameter_callback_handle_;
 };
 
 int main(int argc, char ** argv)

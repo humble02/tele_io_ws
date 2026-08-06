@@ -37,6 +37,13 @@ ros2 launch robot_bringup bringup_real.launch.py
 with `arms:=both`. Wuji hands are discovered by USB serial number and each driver publishes
 under `/hand_left` or `/hand_right` after detecting physical handedness.
 
+Marvin starts with both `velocity_ratio` and `acceleration_ratio` set to `10`.
+Whenever the current `io_joint_state_bridge` starts, it atomically resets both values
+to `10`; only after that succeeds does it wait 10 seconds and atomically promote both
+values to `100`.
+After a footswitch freeze, pressing the middle pedal to resume atomically resets both
+values to `10` again; once confirmed, the bridge waits 3 seconds before restoring `100`.
+
 Use another Marvin mode launch explicitly when needed:
 
 ```bash

@@ -25,6 +25,10 @@ if(BUILD_TESTING)
     test_launch_confirmation
     test/test_launch_confirmation.py
   )
+  ament_add_pytest_test(
+    test_limit_promotion
+    test/test_limit_promotion.py
+  )
 endif()
 
 ament_package()

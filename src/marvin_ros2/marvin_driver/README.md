@@ -109,6 +109,19 @@ SetJointPostionCmd(arm, joint_degrees)
 
 ROS commands remain in radians and are converted inside the driver.
 
+`velocity_ratio` and `acceleration_ratio` support atomic runtime updates while the
+driver is connected and the arms are enabled:
+
+```bash
+ros2 param set /marvin/marvin_driver velocity_ratio 50
+ros2 param set /marvin/marvin_driver acceleration_ratio 50
+```
+
+Automation that needs both values to take effect together should call
+`/marvin/marvin_driver/set_parameters_atomically`. Both values must be in `1..100`.
+The driver updates all configured arms in one SDK command frame and checks the
+controller feedback. PVT and drag modes are not governed by these limits.
+
 ## Startup Error Handling
 
 The driver uses the SDK concise `Connect` function. In the old SDK, `Connect` calls

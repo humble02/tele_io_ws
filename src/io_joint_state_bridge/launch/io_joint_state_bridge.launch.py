@@ -55,6 +55,20 @@ def generate_launch_description() -> LaunchDescription:
             DeclareLaunchArgument("hold_feedback_timeout_sec", default_value="0.25"),
             DeclareLaunchArgument("resume_arm_max_velocity_rad_s", default_value="0.5"),
             DeclareLaunchArgument("resume_hand_max_velocity_rad_s", default_value="1.0"),
+            DeclareLaunchArgument("enable_marvin_limit_promotion", default_value="true"),
+            DeclareLaunchArgument(
+                "marvin_driver_node", default_value="/marvin/marvin_driver"
+            ),
+            DeclareLaunchArgument(
+                "marvin_limit_promotion_delay_sec", default_value="10.0"
+            ),
+            DeclareLaunchArgument(
+                "footswitch_resume_limit_delay_sec", default_value="3.0"
+            ),
+            DeclareLaunchArgument("startup_velocity_ratio", default_value="10"),
+            DeclareLaunchArgument("startup_acceleration_ratio", default_value="10"),
+            DeclareLaunchArgument("promoted_velocity_ratio", default_value="100"),
+            DeclareLaunchArgument("promoted_acceleration_ratio", default_value="100"),
             DeclareLaunchArgument("io_state_topic", default_value="/io_teleop/joint_states"),
             DeclareLaunchArgument("io_command_topic", default_value="/io_teleop/joint_cmd"),
             DeclareLaunchArgument(
@@ -131,6 +145,32 @@ def generate_launch_description() -> LaunchDescription:
                         "resume_hand_max_velocity_rad_s": ParameterValue(
                             LaunchConfiguration("resume_hand_max_velocity_rad_s"),
                             value_type=float,
+                        ),
+                        "enable_marvin_limit_promotion": ParameterValue(
+                            LaunchConfiguration("enable_marvin_limit_promotion"),
+                            value_type=bool,
+                        ),
+                        "marvin_driver_node": LaunchConfiguration("marvin_driver_node"),
+                        "marvin_limit_promotion_delay_sec": ParameterValue(
+                            LaunchConfiguration("marvin_limit_promotion_delay_sec"),
+                            value_type=float,
+                        ),
+                        "footswitch_resume_limit_delay_sec": ParameterValue(
+                            LaunchConfiguration("footswitch_resume_limit_delay_sec"),
+                            value_type=float,
+                        ),
+                        "startup_velocity_ratio": ParameterValue(
+                            LaunchConfiguration("startup_velocity_ratio"), value_type=int
+                        ),
+                        "startup_acceleration_ratio": ParameterValue(
+                            LaunchConfiguration("startup_acceleration_ratio"),
+                            value_type=int,
+                        ),
+                        "promoted_velocity_ratio": ParameterValue(
+                            LaunchConfiguration("promoted_velocity_ratio"), value_type=int
+                        ),
+                        "promoted_acceleration_ratio": ParameterValue(
+                            LaunchConfiguration("promoted_acceleration_ratio"), value_type=int
                         ),
                         "left_hand_state_topic": LaunchConfiguration(
                             "left_hand_state_topic"

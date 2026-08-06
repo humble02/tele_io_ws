@@ -7,9 +7,11 @@ from dataclasses import dataclass
 from typing import List, Optional
 
 import rclpy
+from rcl_interfaces.srv import SetParametersAtomically
 from rclpy._rclpy_pybind11 import RCLError
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
+from rclpy.parameter import Parameter
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import JointState
 from std_msgs.msg import UInt8
@@ -28,6 +30,7 @@ DEFAULT_IO_COMMAND_JOINT_NAMES = RIGHT_JOINT_NAMES + LEFT_JOINT_NAMES
 DEFAULT_IO_STATE_JOINT_NAMES = RIGHT_JOINT_NAMES + LEFT_JOINT_NAMES
 LEFT_FROZEN = 0x01
 RIGHT_FROZEN = 0x02
+MARVIN_LIMIT_RETRY_PERIOD_SEC = 0.5
 
 
 @dataclass
@@ -87,6 +90,14 @@ class IoJointStateBridge(Node):
         self.declare_parameter("hold_feedback_timeout_sec", 0.25)
         self.declare_parameter("resume_arm_max_velocity_rad_s", 0.5)
         self.declare_parameter("resume_hand_max_velocity_rad_s", 1.0)
+        self.declare_parameter("enable_marvin_limit_promotion", True)
+        self.declare_parameter("marvin_driver_node", "/marvin/marvin_driver")
+        self.declare_parameter("marvin_limit_promotion_delay_sec", 10.0)
+        self.declare_parameter("footswitch_resume_limit_delay_sec", 3.0)
+        self.declare_parameter("startup_velocity_ratio", 10)
+        self.declare_parameter("startup_acceleration_ratio", 10)
+        self.declare_parameter("promoted_velocity_ratio", 100)
+        self.declare_parameter("promoted_acceleration_ratio", 100)
         self.declare_parameter("left_hand_state_topic", "/hand_left/joint_states")
         self.declare_parameter("right_hand_state_topic", "/hand_right/joint_states")
         self.declare_parameter("left_hand_command_topic", "/hand_left/joint_commands")
@@ -147,6 +158,45 @@ class IoJointStateBridge(Node):
             raise ValueError("resume_arm_max_velocity_rad_s must be >= 0")
         if self._resume_hand_max_velocity_rad_s < 0.0:
             raise ValueError("resume_hand_max_velocity_rad_s must be >= 0")
+        self._enable_marvin_limit_promotion = bool(
+            self.get_parameter("enable_marvin_limit_promotion").value
+        )
+        self._marvin_driver_node = str(
+            self.get_parameter("marvin_driver_node").value
+        ).rstrip("/")
+        self._marvin_limit_promotion_delay_sec = float(
+            self.get_parameter("marvin_limit_promotion_delay_sec").value
+        )
+        self._footswitch_resume_limit_delay_sec = float(
+            self.get_parameter("footswitch_resume_limit_delay_sec").value
+        )
+        self._startup_velocity_ratio = int(
+            self.get_parameter("startup_velocity_ratio").value
+        )
+        self._startup_acceleration_ratio = int(
+            self.get_parameter("startup_acceleration_ratio").value
+        )
+        self._promoted_velocity_ratio = int(
+            self.get_parameter("promoted_velocity_ratio").value
+        )
+        self._promoted_acceleration_ratio = int(
+            self.get_parameter("promoted_acceleration_ratio").value
+        )
+        if self._enable_marvin_limit_promotion:
+            if not self._marvin_driver_node:
+                raise ValueError("marvin_driver_node must not be empty")
+            if self._marvin_limit_promotion_delay_sec <= 0.0:
+                raise ValueError("marvin_limit_promotion_delay_sec must be > 0")
+            if self._footswitch_resume_limit_delay_sec <= 0.0:
+                raise ValueError("footswitch_resume_limit_delay_sec must be > 0")
+            for name, value in (
+                ("startup_velocity_ratio", self._startup_velocity_ratio),
+                ("startup_acceleration_ratio", self._startup_acceleration_ratio),
+                ("promoted_velocity_ratio", self._promoted_velocity_ratio),
+                ("promoted_acceleration_ratio", self._promoted_acceleration_ratio),
+            ):
+                if not 1 <= value <= 100:
+                    raise ValueError(f"{name} must be in [1, 100]")
         self._left_hand_state_topic = str(
             self.get_parameter("left_hand_state_topic").value
         )
@@ -284,6 +334,23 @@ class IoJointStateBridge(Node):
 
         self.create_timer(1.0 / self._publish_rate_hz, self._publish_io_state)
         self.create_timer(1.0 / self._hold_publish_rate_hz, self._publish_holds)
+        self._marvin_limit_client = None
+        self._marvin_limit_timer = None
+        self._marvin_limit_future = None
+        self._marvin_limit_future_phase = None
+        self._marvin_limit_future_generation = None
+        self._marvin_limit_generation = 0
+        self._marvin_limit_sequence = None
+        self._marvin_limit_delay_sec = 0.0
+        self._marvin_limit_phase = "disabled"
+        if self._enable_marvin_limit_promotion:
+            service_name = f"{self._marvin_driver_node}/set_parameters_atomically"
+            self._marvin_limit_client = self.create_client(
+                SetParametersAtomically, service_name
+            )
+            self._start_marvin_limit_sequence(
+                "startup", self._marvin_limit_promotion_delay_sec
+            )
         self.get_logger().info(
             "io_joint_state_bridge ready: "
             f"{self._left_state_topic}+{self._right_state_topic} "
@@ -294,6 +361,115 @@ class IoJointStateBridge(Node):
             f"freeze_mask={self._freeze_mask_topic}, "
             f"rate={self._publish_rate_hz:.1f} Hz"
         )
+        if self._enable_marvin_limit_promotion:
+            self.get_logger().info(
+                "Marvin arm limits will first be reset to "
+                f"velocity_ratio={self._startup_velocity_ratio} "
+                f"acceleration_ratio={self._startup_acceleration_ratio}; "
+                f"the {self._marvin_limit_promotion_delay_sec:.1f} s promotion delay "
+                "starts only after that update succeeds"
+            )
+
+    def _start_marvin_limit_sequence(self, sequence: str, delay_sec: float) -> None:
+        if not self._enable_marvin_limit_promotion:
+            return
+        if self._marvin_limit_timer is not None:
+            self._marvin_limit_timer.cancel()
+        self._marvin_limit_generation += 1
+        self._marvin_limit_sequence = sequence
+        self._marvin_limit_delay_sec = delay_sec
+        self._marvin_limit_phase = f"{sequence}_reset"
+        self._marvin_limit_timer = self.create_timer(
+            MARVIN_LIMIT_RETRY_PERIOD_SEC,
+            self._request_marvin_limit_update,
+        )
+        self._request_marvin_limit_update()
+
+    def _request_marvin_limit_update(self) -> None:
+        if self._marvin_limit_future is not None:
+            return
+        if self._marvin_limit_client is None or not self._marvin_limit_client.service_is_ready():
+            self.get_logger().warn(
+                f"Waiting for parameter service on {self._marvin_driver_node}; "
+                "Marvin arm limits remain unchanged",
+                throttle_duration_sec=10.0,
+            )
+            return
+
+        if self._marvin_limit_phase.endswith("_reset"):
+            velocity_ratio = self._startup_velocity_ratio
+            acceleration_ratio = self._startup_acceleration_ratio
+        elif self._marvin_limit_phase.endswith("_promotion"):
+            velocity_ratio = self._promoted_velocity_ratio
+            acceleration_ratio = self._promoted_acceleration_ratio
+        else:
+            return
+
+        request = SetParametersAtomically.Request()
+        request.parameters = [
+            Parameter("velocity_ratio", value=velocity_ratio).to_parameter_msg(),
+            Parameter(
+                "acceleration_ratio", value=acceleration_ratio
+            ).to_parameter_msg(),
+        ]
+        self._marvin_limit_future_phase = self._marvin_limit_phase
+        self._marvin_limit_future_generation = self._marvin_limit_generation
+        self._marvin_limit_future = self._marvin_limit_client.call_async(request)
+        self._marvin_limit_future.add_done_callback(
+            self._on_marvin_limit_update_response
+        )
+
+    def _on_marvin_limit_update_response(self, future) -> None:
+        phase = self._marvin_limit_future_phase
+        generation = self._marvin_limit_future_generation
+        self._marvin_limit_future = None
+        self._marvin_limit_future_phase = None
+        self._marvin_limit_future_generation = None
+        if generation != self._marvin_limit_generation:
+            self._request_marvin_limit_update()
+            return
+
+        try:
+            response = future.result()
+        except Exception as exc:  # noqa: BLE001 - ROS futures may raise middleware errors
+            self.get_logger().error(
+                f"Failed to update Marvin arm limits: {exc}; will retry"
+            )
+            return
+
+        if response is None or not response.result.successful:
+            reason = "no response" if response is None else response.result.reason
+            self.get_logger().error(
+                f"Marvin driver rejected arm limit update: {reason}; will retry"
+            )
+            return
+
+        if phase is not None and phase.endswith("_reset"):
+            if self._marvin_limit_timer is not None:
+                self._marvin_limit_timer.cancel()
+            self._marvin_limit_phase = f"{self._marvin_limit_sequence}_promotion"
+            self._marvin_limit_timer = self.create_timer(
+                self._marvin_limit_delay_sec,
+                self._request_marvin_limit_update,
+            )
+            self.get_logger().info(
+                "Marvin arm limits reset successfully: "
+                f"velocity_ratio={self._startup_velocity_ratio} "
+                f"acceleration_ratio={self._startup_acceleration_ratio}; "
+                f"starting {self._marvin_limit_delay_sec:.1f} s "
+                f"{self._marvin_limit_sequence} buffer"
+            )
+            return
+
+        if phase is not None and phase.endswith("_promotion"):
+            if self._marvin_limit_timer is not None:
+                self._marvin_limit_timer.cancel()
+            self._marvin_limit_phase = "done"
+            self.get_logger().info(
+                "Marvin arm limits promoted successfully: "
+                f"velocity_ratio={self._promoted_velocity_ratio} "
+                f"acceleration_ratio={self._promoted_acceleration_ratio}"
+            )
 
     def _on_arm_state(self, cache: JointCache, msg: JointState, source: str) -> None:
         indices = self._input_indices(cache, msg, source)
@@ -441,11 +617,16 @@ class IoJointStateBridge(Node):
         )
 
     def _on_freeze_mask(self, msg: UInt8) -> None:
+        was_frozen = self._left_gate.frozen or self._right_gate.frozen
         mask = int(msg.data) & (LEFT_FROZEN | RIGHT_FROZEN)
         if int(msg.data) != mask:
             self.get_logger().warn(
                 f"Ignoring unsupported freeze-mask bits in 0x{int(msg.data):02x}",
                 throttle_duration_sec=1.0,
+            )
+        if was_frozen and mask == 0:
+            self._start_marvin_limit_sequence(
+                "footswitch_resume", self._footswitch_resume_limit_delay_sec
             )
         self._set_side_frozen(
             self._left_gate,

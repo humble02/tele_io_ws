@@ -12,6 +12,29 @@ The launch waits for an interactive confirmation that all VR services have been
 restarted. Press Enter at the terminal prompt to start the bridge and footswitch
 nodes.
 
+For real-arm startup, the bridge first atomically resets `/marvin/marvin_driver`
+`velocity_ratio` and `acceleration_ratio` to `10`. Only after the driver confirms
+that update does the bridge start a 10-second timer, then atomically promote both
+limits to `100`. This guarantees a fresh buffer when only the bridge is restarted
+and the driver still holds `100` from the previous run. The bridge retries if the
+driver parameter service is not ready or rejects either request. Relevant launch
+arguments are:
+
+```text
+enable_marvin_limit_promotion:=true
+marvin_driver_node:=/marvin/marvin_driver
+marvin_limit_promotion_delay_sec:=10.0
+footswitch_resume_limit_delay_sec:=3.0
+startup_velocity_ratio:=10
+startup_acceleration_ratio:=10
+promoted_velocity_ratio:=100
+promoted_acceleration_ratio:=100
+```
+
+Simulation launch files disable this behavior. Pass
+`enable_marvin_limit_promotion:=false` when using the bridge with another dummy
+driver directly.
+
 ## PCsensor footswitch interlock
 
 The launch file also starts `footswitch_pedal`, which discovers the
@@ -21,7 +44,9 @@ fixed `/dev/input/eventX` number.
 - Left pedal (`A`): freeze the left arm and hand at their last forwarded command targets.
 - Right pedal (`C`): freeze the right arm and hand.
 - Middle pedal (`B`): release all frozen sides and rate-limit the transition back to
-  incoming IO joint commands.
+  incoming IO joint commands. On a frozen-to-resumed transition, the bridge also
+  resets the Marvin velocity and acceleration ratios to `10`; after that update is
+  confirmed, it waits 3 seconds and restores both ratios to `100`.
 
 Install the input dependency and device permission rule once:
 

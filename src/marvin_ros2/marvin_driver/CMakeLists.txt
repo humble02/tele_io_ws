@@ -7,6 +7,7 @@ endif()
 
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
+find_package(rcl_interfaces REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(std_srvs REQUIRED)
 
@@ -37,6 +38,7 @@ add_executable(marvin_driver_node src/marvin_driver_node.cpp)
 configure_marvin_sdk_target(marvin_driver_node)
 ament_target_dependencies(marvin_driver_node
   rclcpp
+  rcl_interfaces
   sensor_msgs
   std_srvs
 )

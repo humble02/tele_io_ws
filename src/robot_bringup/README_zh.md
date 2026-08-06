@@ -36,6 +36,12 @@ ros2 launch robot_bringup bringup_real.launch.py
 namespace 下启动，`arms:=both`。Wuji hand driver 会按 USB serial number 自动发现设备，
 并在检测物理左右手后发布到 `/hand_left` 或 `/hand_right`。
 
+Marvin 的 `velocity_ratio` 和 `acceleration_ratio` 默认均为 `10`。每次启动新版
+`io_joint_state_bridge` 时，bridge 都会先通过原子参数请求把两项重置为 `10`；确认成功后
+才开始计时，等待 10 秒再把两项提升为 `100`。
+通过脚踏板冻结后踩中间踏板恢复时，bridge 会再次将两项重置为 `10`，
+确认成功后等待 3 秒，再恢复为 `100`。
+
 需要切换 Marvin 控制模式时显式指定底层 launch：
 
 ```bash

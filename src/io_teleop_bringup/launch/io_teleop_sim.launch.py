@@ -44,6 +44,7 @@ def generate_launch_description() -> LaunchDescription:
                 "io_joint_state_bridge",
                 "io_joint_state_bridge.launch.py",
                 {
+                    "enable_marvin_limit_promotion": "false",
                     "forward_arm_commands": PythonExpression(
                         ["'", LaunchConfiguration("arm_command_mode"), "' == 'joint_cmd'"]
                     ),

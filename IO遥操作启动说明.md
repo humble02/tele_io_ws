@@ -53,7 +53,9 @@ ros2 launch io_joint_state_bridge io_joint_state_bridge.launch.py     publish_ra
 `joint_cmd` 模式默认同时启动 PCsensor USB 脚踏板节点：左踏板冻结左臂手，
 右踏板冻结右臂手，中间踏板解除所有冻结。冻结期间 bridge 会持续发送冻结前
 最后一次实际下发的关节目标；只有尚未下发过命令时才用实际反馈位置兜底。
-解除时会限速恢复到当前 IO 命令，避免关节目标一步跳变。
+解除时会限速恢复到当前 IO 命令，避免关节目标一步跳变。真机上从
+冻结状态踩中间踏板恢复时，bridge 还会先将 Marvin 速度和加速度比例
+同时重置为 `10`，确认生效后等待 3 秒，再同时恢复为 `100`。
 
 首次使用需要安装依赖和 udev 权限规则：
 
@@ -88,6 +90,12 @@ ros2 launch robot_bringup marvin_elbow_pose.launch.py
 ```bash
 ros2 launch io_joint_state_bridge io_joint_state_bridge.launch.py     publish_rate_hz:=50.0
 ```
+
+`bringup_real` 启动时机械臂速度和加速度比例均为 `10`。每次启动 IO bridge
+时，bridge 都会先通过 Marvin driver 的原子参数服务将两项重置为 `10`；
+确认成功后才开始 10 秒计时，然后将两项同时提升为 `100`。
+如果通过左/右脚踏板停止后再踩中间踏板恢复，也会重新执行
+`10 -> 等待 3 秒 -> 100` 的限幅流程。
 
 ```text
 /io_teleop/joint_states
