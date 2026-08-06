@@ -44,7 +44,10 @@ def generate_launch_description() -> LaunchDescription:
                 {
                     "forward_arm_commands": PythonExpression(
                         ["'", LaunchConfiguration("arm_command_mode"), "' == 'joint_cmd'"]
-                    )
+                    ),
+                    "enable_footswitch": PythonExpression(
+                        ["'", LaunchConfiguration("arm_command_mode"), "' == 'joint_cmd'"]
+                    ),
                 },
             ),
             package_launch(

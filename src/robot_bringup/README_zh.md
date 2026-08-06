@@ -97,14 +97,18 @@ ros2 launch robot_bringup io_joint_state_bridge.launch.py
 从 Marvin 当前实测反馈平滑移动到曲肘状态：
 
 ```bash
-ros2 launch robot_bringup marvin_elbow_pose.launch.py
+# 比赛准备姿势（默认）
+ros2 launch robot_bringup marvin_elbow_pose.launch.py pose:=prepare
+
+# 运输包装姿势
+ros2 launch robot_bringup marvin_elbow_pose.launch.py pose:=transport
 ```
 
-默认目标单位是度：
+也可以直接运行节点：
 
-```text
-left:  [-90,  90, 90, -90, 0, 0, 0]
-right: [-90, -90, 90,  90, 0, 0, 0]
+```bash
+ros2 run robot_bringup marvin_elbow_pose --pose prepare
+ros2 run robot_bringup marvin_elbow_pose --pose transport
 ```
 
 该节点会先等待 `/marvin/left/joint_states` 和 `/marvin/right/joint_states`，

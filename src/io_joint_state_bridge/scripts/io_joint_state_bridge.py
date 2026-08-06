@@ -12,6 +12,7 @@ from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import JointState
+from std_msgs.msg import UInt8
 
 
 LEFT_JOINT_NAMES = [f"Joint{index}_L" for index in range(1, 8)]
@@ -25,6 +26,8 @@ RIGHT_HAND_JOINT_NAMES = [
 ARM_JOINT_NAMES = LEFT_JOINT_NAMES + RIGHT_JOINT_NAMES
 DEFAULT_IO_COMMAND_JOINT_NAMES = RIGHT_JOINT_NAMES + LEFT_JOINT_NAMES
 DEFAULT_IO_STATE_JOINT_NAMES = RIGHT_JOINT_NAMES + LEFT_JOINT_NAMES
+LEFT_FROZEN = 0x01
+RIGHT_FROZEN = 0x02
 
 
 @dataclass
@@ -38,6 +41,23 @@ class JointCache:
     received: bool = False
     input_names: tuple[str, ...] = ()
     input_indices: tuple[int, ...] = ()
+    last_update_ns: int = 0
+
+
+@dataclass
+class SideGate:
+    side: str
+    frozen: bool = False
+    arm_hold: Optional[JointState] = None
+    hand_hold: Optional[JointState] = None
+    arm_output: Optional[JointState] = None
+    hand_output: Optional[JointState] = None
+    latest_arm_target: Optional[JointState] = None
+    latest_hand_target: Optional[JointState] = None
+    arm_resuming: bool = False
+    hand_resuming: bool = False
+    arm_last_publish_ns: int = 0
+    hand_last_publish_ns: int = 0
 
 
 class IoJointStateBridge(Node):
@@ -62,6 +82,13 @@ class IoJointStateBridge(Node):
         self.declare_parameter("right_state_topic", "/marvin/right/joint_states")
         self.declare_parameter("left_command_topic", "/marvin/left/joint_commands")
         self.declare_parameter("right_command_topic", "/marvin/right/joint_commands")
+        self.declare_parameter("freeze_mask_topic", "/io_teleop/freeze_mask")
+        self.declare_parameter("hold_publish_rate_hz", 50.0)
+        self.declare_parameter("hold_feedback_timeout_sec", 0.25)
+        self.declare_parameter("resume_arm_max_velocity_rad_s", 0.5)
+        self.declare_parameter("resume_hand_max_velocity_rad_s", 1.0)
+        self.declare_parameter("left_hand_state_topic", "/hand_left/joint_states")
+        self.declare_parameter("right_hand_state_topic", "/hand_right/joint_states")
         self.declare_parameter("left_hand_command_topic", "/hand_left/joint_commands")
         self.declare_parameter("right_hand_command_topic", "/hand_right/joint_commands")
 
@@ -99,6 +126,33 @@ class IoJointStateBridge(Node):
         self._right_state_topic = str(self.get_parameter("right_state_topic").value)
         self._left_command_topic = str(self.get_parameter("left_command_topic").value)
         self._right_command_topic = str(self.get_parameter("right_command_topic").value)
+        self._freeze_mask_topic = str(self.get_parameter("freeze_mask_topic").value)
+        self._hold_publish_rate_hz = float(
+            self.get_parameter("hold_publish_rate_hz").value
+        )
+        self._hold_feedback_timeout_sec = float(
+            self.get_parameter("hold_feedback_timeout_sec").value
+        )
+        self._resume_arm_max_velocity_rad_s = float(
+            self.get_parameter("resume_arm_max_velocity_rad_s").value
+        )
+        self._resume_hand_max_velocity_rad_s = float(
+            self.get_parameter("resume_hand_max_velocity_rad_s").value
+        )
+        if self._hold_publish_rate_hz <= 0.0:
+            raise ValueError("hold_publish_rate_hz must be > 0")
+        if self._hold_feedback_timeout_sec <= 0.0:
+            raise ValueError("hold_feedback_timeout_sec must be > 0")
+        if self._resume_arm_max_velocity_rad_s < 0.0:
+            raise ValueError("resume_arm_max_velocity_rad_s must be >= 0")
+        if self._resume_hand_max_velocity_rad_s < 0.0:
+            raise ValueError("resume_hand_max_velocity_rad_s must be >= 0")
+        self._left_hand_state_topic = str(
+            self.get_parameter("left_hand_state_topic").value
+        )
+        self._right_hand_state_topic = str(
+            self.get_parameter("right_hand_state_topic").value
+        )
         self._left_hand_command_topic = str(
             self.get_parameter("left_hand_command_topic").value
         )
@@ -118,6 +172,20 @@ class IoJointStateBridge(Node):
             velocity=[0.0] * len(RIGHT_JOINT_NAMES),
             effort=[0.0] * len(RIGHT_JOINT_NAMES),
         )
+        self._left_hand = JointCache(
+            names=LEFT_HAND_JOINT_NAMES,
+            position=[0.0] * len(LEFT_HAND_JOINT_NAMES),
+            velocity=[0.0] * len(LEFT_HAND_JOINT_NAMES),
+            effort=[0.0] * len(LEFT_HAND_JOINT_NAMES),
+        )
+        self._right_hand = JointCache(
+            names=RIGHT_HAND_JOINT_NAMES,
+            position=[0.0] * len(RIGHT_HAND_JOINT_NAMES),
+            velocity=[0.0] * len(RIGHT_HAND_JOINT_NAMES),
+            effort=[0.0] * len(RIGHT_HAND_JOINT_NAMES),
+        )
+        self._left_gate = SideGate("left")
+        self._right_gate = SideGate("right")
         self._state_caches = (self._left, self._right)
         cache_by_name = {
             name: (cache, index)
@@ -160,6 +228,28 @@ class IoJointStateBridge(Node):
             lambda msg: self._on_arm_state(self._right, msg, self._right_state_topic),
             qos_profile_sensor_data,
         )
+        self.create_subscription(
+            JointState,
+            self._left_hand_state_topic,
+            lambda msg: self._on_hand_state(
+                self._left_hand, self._left_gate, msg, self._left_hand_state_topic
+            ),
+            qos_profile_sensor_data,
+        )
+        self.create_subscription(
+            JointState,
+            self._right_hand_state_topic,
+            lambda msg: self._on_hand_state(
+                self._right_hand, self._right_gate, msg, self._right_hand_state_topic
+            ),
+            qos_profile_sensor_data,
+        )
+        self.create_subscription(
+            UInt8,
+            self._freeze_mask_topic,
+            self._on_freeze_mask,
+            10,
+        )
         if self._forward_arm_commands:
             self.create_subscription(
                 JointState,
@@ -173,6 +263,7 @@ class IoJointStateBridge(Node):
             lambda msg: self._on_io_hand_command(
                 msg,
                 LEFT_HAND_JOINT_NAMES,
+                self._left_gate,
                 self._left_hand_command_pub,
                 self._io_left_hand_command_topic,
             ),
@@ -184,6 +275,7 @@ class IoJointStateBridge(Node):
             lambda msg: self._on_io_hand_command(
                 msg,
                 RIGHT_HAND_JOINT_NAMES,
+                self._right_gate,
                 self._right_hand_command_pub,
                 self._io_right_hand_command_topic,
             ),
@@ -191,6 +283,7 @@ class IoJointStateBridge(Node):
         )
 
         self.create_timer(1.0 / self._publish_rate_hz, self._publish_io_state)
+        self.create_timer(1.0 / self._hold_publish_rate_hz, self._publish_holds)
         self.get_logger().info(
             "io_joint_state_bridge ready: "
             f"{self._left_state_topic}+{self._right_state_topic} "
@@ -198,6 +291,7 @@ class IoJointStateBridge(Node):
             f"arm_command_forwarding={self._forward_arm_commands}, "
             f"{self._io_left_hand_command_topic} -> {self._left_hand_command_topic}, "
             f"{self._io_right_hand_command_topic} -> {self._right_hand_command_topic}, "
+            f"freeze_mask={self._freeze_mask_topic}, "
             f"rate={self._publish_rate_hz:.1f} Hz"
         )
 
@@ -224,6 +318,54 @@ class IoJointStateBridge(Node):
         if effort is not None:
             cache.effort = effort
         cache.received = True
+        cache.last_update_ns = self.get_clock().now().nanoseconds
+
+        gate = self._left_gate if cache is self._left else self._right_gate
+        publisher = (
+            self._left_command_pub if cache is self._left else self._right_command_pub
+        )
+        if gate.frozen and gate.arm_hold is None and publisher is not None:
+            gate.arm_hold = self._command_from_cache(cache)
+            self._publish_gate_output(gate, "arm", gate.arm_hold, publisher)
+
+    def _on_hand_state(
+        self,
+        cache: JointCache,
+        gate: SideGate,
+        msg: JointState,
+        source: str,
+    ) -> None:
+        indices = self._input_indices(cache, msg, source)
+        if indices is None:
+            return
+        positions = self._extract_values(msg.position, indices)
+        if positions is None:
+            self.get_logger().warn(
+                f"Ignoring JointState from {source}: position array is too short",
+                throttle_duration_sec=1.0,
+            )
+            return
+
+        cache.position = positions
+        velocity = self._extract_values(msg.velocity, indices) if msg.velocity else None
+        effort = self._extract_values(msg.effort, indices) if msg.effort else None
+        cache.has_velocity = velocity is not None
+        cache.has_effort = effort is not None
+        if velocity is not None:
+            cache.velocity = velocity
+        if effort is not None:
+            cache.effort = effort
+        cache.received = True
+        cache.last_update_ns = self.get_clock().now().nanoseconds
+
+        publisher = (
+            self._left_hand_command_pub
+            if gate is self._left_gate
+            else self._right_hand_command_pub
+        )
+        if gate.frozen and gate.hand_hold is None:
+            gate.hand_hold = self._command_from_cache(cache)
+            self._publish_gate_output(gate, "hand", gate.hand_hold, publisher)
 
     def _publish_io_state(self) -> None:
         if self._require_both_feedback and (not self._left.received or not self._right.received):
@@ -255,13 +397,26 @@ class IoJointStateBridge(Node):
 
         if self._left_command_pub is None or self._right_command_pub is None:
             return
-        self._left_command_pub.publish(left_command)
-        self._right_command_pub.publish(right_command)
+        self._forward_gated_command(
+            self._left_gate,
+            "arm",
+            left_command,
+            self._left_command_pub,
+            self._resume_arm_max_velocity_rad_s,
+        )
+        self._forward_gated_command(
+            self._right_gate,
+            "arm",
+            right_command,
+            self._right_command_pub,
+            self._resume_arm_max_velocity_rad_s,
+        )
 
     def _on_io_hand_command(
         self,
         msg: JointState,
         joint_names: list[str],
+        gate: SideGate,
         publisher: rclpy.publisher.Publisher,
         source: str,
     ) -> None:
@@ -277,7 +432,226 @@ class IoJointStateBridge(Node):
         out.position = positions
         out.velocity = self._extract_optional_by_names(msg.name, msg.velocity, joint_names)
         out.effort = self._extract_optional_by_names(msg.name, msg.effort, joint_names)
+        self._forward_gated_command(
+            gate,
+            "hand",
+            out,
+            publisher,
+            self._resume_hand_max_velocity_rad_s,
+        )
+
+    def _on_freeze_mask(self, msg: UInt8) -> None:
+        mask = int(msg.data) & (LEFT_FROZEN | RIGHT_FROZEN)
+        if int(msg.data) != mask:
+            self.get_logger().warn(
+                f"Ignoring unsupported freeze-mask bits in 0x{int(msg.data):02x}",
+                throttle_duration_sec=1.0,
+            )
+        self._set_side_frozen(
+            self._left_gate,
+            bool(mask & LEFT_FROZEN),
+            self._left,
+            self._left_hand,
+            self._left_command_pub,
+            self._left_hand_command_pub,
+        )
+        self._set_side_frozen(
+            self._right_gate,
+            bool(mask & RIGHT_FROZEN),
+            self._right,
+            self._right_hand,
+            self._right_command_pub,
+            self._right_hand_command_pub,
+        )
+
+    def _set_side_frozen(
+        self,
+        gate: SideGate,
+        frozen: bool,
+        arm_cache: JointCache,
+        hand_cache: JointCache,
+        arm_publisher: Optional[rclpy.publisher.Publisher],
+        hand_publisher: rclpy.publisher.Publisher,
+    ) -> None:
+        if frozen == gate.frozen:
+            return
+
+        gate.frozen = frozen
+        if frozen:
+            gate.arm_resuming = False
+            gate.hand_resuming = False
+            gate.arm_hold = self._snapshot_hold(
+                arm_cache, gate.arm_output, f"{gate.side} arm"
+            )
+            gate.hand_hold = self._snapshot_hold(
+                hand_cache, gate.hand_output, f"{gate.side} hand"
+            )
+            if gate.arm_hold is not None and arm_publisher is not None:
+                self._publish_gate_output(gate, "arm", gate.arm_hold, arm_publisher)
+            if gate.hand_hold is not None:
+                self._publish_gate_output(gate, "hand", gate.hand_hold, hand_publisher)
+            self.get_logger().warning(f"{gate.side} arm and hand frozen")
+            return
+
+        gate.arm_resuming = gate.arm_output is not None
+        gate.hand_resuming = gate.hand_output is not None
+        self.get_logger().info(
+            f"{gate.side} arm and hand released; resuming IO commands with rate limiting"
+        )
+
+    def _snapshot_hold(
+        self,
+        cache: JointCache,
+        last_output: Optional[JointState],
+        label: str,
+    ) -> Optional[JointState]:
+        # Keep the controller's last position setpoint unchanged. Replacing it with
+        # measured feedback would remove the position error that may be balancing
+        # gravity/load and can therefore cause a small motion at freeze time.
+        if last_output is not None:
+            return self._copy_command(last_output, zero_dynamics=True)
+
+        now_ns = self.get_clock().now().nanoseconds
+        feedback_age_sec = (
+            (now_ns - cache.last_update_ns) / 1e9 if cache.last_update_ns else float("inf")
+        )
+        if cache.received and feedback_age_sec <= self._hold_feedback_timeout_sec:
+            self.get_logger().warn(
+                f"{label} has no previous output target; holding measured feedback as fallback"
+            )
+            return self._command_from_cache(cache)
+
+        self.get_logger().error(
+            f"Cannot create a {label} hold command: no feedback or previous output; "
+            "new IO commands will still be blocked"
+        )
+        return None
+
+    def _forward_gated_command(
+        self,
+        gate: SideGate,
+        kind: str,
+        target: JointState,
+        publisher: rclpy.publisher.Publisher,
+        max_velocity_rad_s: float,
+    ) -> None:
+        setattr(gate, f"latest_{kind}_target", self._copy_command(target))
+        if gate.frozen:
+            return
+
+        output = target
+        if getattr(gate, f"{kind}_resuming"):
+            current = getattr(gate, f"{kind}_output")
+            last_publish_ns = getattr(gate, f"{kind}_last_publish_ns")
+            output, complete = self._rate_limit_command(
+                current,
+                target,
+                last_publish_ns,
+                max_velocity_rad_s,
+            )
+            setattr(gate, f"{kind}_resuming", not complete)
+            if complete:
+                setattr(gate, f"{kind}_hold", None)
+
+        self._publish_gate_output(gate, kind, output, publisher)
+
+    def _publish_holds(self) -> None:
+        for gate, arm_publisher, hand_publisher in (
+            (
+                self._left_gate,
+                self._left_command_pub,
+                self._left_hand_command_pub,
+            ),
+            (
+                self._right_gate,
+                self._right_command_pub,
+                self._right_hand_command_pub,
+            ),
+        ):
+            if not gate.frozen:
+                continue
+            if gate.arm_hold is not None and arm_publisher is not None:
+                self._publish_gate_output(gate, "arm", gate.arm_hold, arm_publisher)
+            if gate.hand_hold is not None:
+                self._publish_gate_output(gate, "hand", gate.hand_hold, hand_publisher)
+
+    def _publish_gate_output(
+        self,
+        gate: SideGate,
+        kind: str,
+        command: JointState,
+        publisher: rclpy.publisher.Publisher,
+    ) -> None:
+        out = self._copy_command(command)
+        out.header.stamp = self.get_clock().now().to_msg()
         publisher.publish(out)
+        setattr(gate, f"{kind}_output", self._copy_command(out))
+        setattr(
+            gate,
+            f"{kind}_last_publish_ns",
+            self.get_clock().now().nanoseconds,
+        )
+
+    def _rate_limit_command(
+        self,
+        current: Optional[JointState],
+        target: JointState,
+        last_publish_ns: int,
+        max_velocity_rad_s: float,
+    ) -> tuple[JointState, bool]:
+        if (
+            current is None
+            or max_velocity_rad_s <= 0.0
+            or len(current.position) != len(target.position)
+        ):
+            return self._copy_command(target), True
+
+        now_ns = self.get_clock().now().nanoseconds
+        elapsed_sec = (now_ns - last_publish_ns) / 1e9 if last_publish_ns else 0.0
+        elapsed_sec = min(max(elapsed_sec, 1e-4), 0.1)
+        max_step = max_velocity_rad_s * elapsed_sec
+        complete = True
+        positions: list[float] = []
+        for current_value, target_value in zip(current.position, target.position):
+            delta = float(target_value) - float(current_value)
+            if abs(delta) <= max_step:
+                positions.append(float(target_value))
+            else:
+                complete = False
+                positions.append(
+                    float(current_value) + (max_step if delta > 0.0 else -max_step)
+                )
+
+        out = self._copy_command(target)
+        out.position = positions
+        if not complete:
+            out.velocity = [0.0] * len(positions)
+            out.effort = [0.0] * len(positions)
+        return out, complete
+
+    def _command_from_cache(self, cache: JointCache) -> JointState:
+        out = JointState()
+        out.header.stamp = self.get_clock().now().to_msg()
+        out.name = list(cache.names)
+        out.position = list(cache.position)
+        out.velocity = [0.0] * len(cache.names)
+        out.effort = [0.0] * len(cache.names)
+        return out
+
+    @staticmethod
+    def _copy_command(msg: JointState, zero_dynamics: bool = False) -> JointState:
+        out = JointState()
+        out.header.stamp = msg.header.stamp
+        out.header.frame_id = msg.header.frame_id
+        out.name = list(msg.name)
+        out.position = [float(value) for value in msg.position]
+        if zero_dynamics:
+            out.velocity = [0.0] * len(out.position)
+            out.effort = [0.0] * len(out.position)
+        else:
+            out.velocity = [float(value) for value in msg.velocity]
+            out.effort = [float(value) for value in msg.effort]
+        return out
 
     def _extract_command_side(
         self,

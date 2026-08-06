@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import argparse
 import math
+import sys
 from contextlib import suppress
 from dataclasses import dataclass
 from typing import Dict, List, Optional
@@ -11,14 +13,25 @@ import rclpy
 from rclpy._rclpy_pybind11 import RCLError
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
+from rclpy.parameter import Parameter
 from rclpy.qos import qos_profile_sensor_data
+from rclpy.utilities import remove_ros_args
 from sensor_msgs.msg import JointState
 
 
 LEFT_JOINT_NAMES = [f"Joint{index}_L" for index in range(1, 8)]
 RIGHT_JOINT_NAMES = [f"Joint{index}_R" for index in range(1, 8)]
-LEFT_ELBOW_TARGET_DEG = [-90.0, 80.0, 100.0, -90.0, -0.0, 0.0, 0.0]
-RIGHT_ELBOW_TARGET_DEG = [90.0, 80.0, -100.0, -90.0, 0.0, 0.0, 0.0]
+DEFAULT_POSE = "prepare"
+POSE_TARGETS_DEG = {
+    "prepare": {
+        "left": [-90.0, 80.0, 100.0, -90.0, -0.0, 0.0, 0.0],
+        "right": [90.0, 80.0, -100.0, -90.0, 0.0, 0.0, 0.0],
+    },
+    "transport": {
+        "left": [-90.0, 90.0, 90.0, 0.0, -0.0, 0.0, 0.0],
+        "right": [90.0, 90.0, -90.0, 0.0, 0.0, 0.0, 0.0],
+    },
+}
 
 
 @dataclass
@@ -48,9 +61,10 @@ def parse_arms(value: str) -> list[str]:
 
 
 class MarvinElbowPose(Node):
-    def __init__(self) -> None:
+    def __init__(self, pose_override: Optional[str] = None) -> None:
         super().__init__("marvin_elbow_pose")
 
+        self.declare_parameter("pose", DEFAULT_POSE)
         self.declare_parameter("arms", "both")
         self.declare_parameter("command_rate_hz", 50.0)
         self.declare_parameter("hold_before_move_sec", 0.5)
@@ -62,8 +76,19 @@ class MarvinElbowPose(Node):
         self.declare_parameter("right_state_topic", "/marvin/right/joint_states")
         self.declare_parameter("left_command_topic", "/marvin/left/joint_commands")
         self.declare_parameter("right_command_topic", "/marvin/right/joint_commands")
-        self.declare_parameter("left_target_deg", LEFT_ELBOW_TARGET_DEG)
-        self.declare_parameter("right_target_deg", RIGHT_ELBOW_TARGET_DEG)
+        parameter_pose = str(self.get_parameter("pose").value).strip().lower()
+        self._pose = pose_override.strip().lower() if pose_override else parameter_pose
+        if self._pose not in POSE_TARGETS_DEG:
+            valid_poses = ", ".join(sorted(POSE_TARGETS_DEG))
+            raise ValueError(
+                f"Invalid pose '{self._pose}', expected one of: {valid_poses}"
+            )
+        if pose_override and self._pose != parameter_pose:
+            self.set_parameters([Parameter("pose", value=self._pose)])
+
+        pose_targets = POSE_TARGETS_DEG[self._pose]
+        self.declare_parameter("left_target_deg", pose_targets["left"])
+        self.declare_parameter("right_target_deg", pose_targets["right"])
 
         self._enabled_arms = parse_arms(str(self.get_parameter("arms").value))
         self._command_rate_hz = float(self.get_parameter("command_rate_hz").value)
@@ -119,14 +144,16 @@ class MarvinElbowPose(Node):
         )
         self.get_logger().info(
             "marvin_elbow_pose waiting for feedback: "
-            f"arms={self._enabled_arms}, targets_deg={targets}, "
+            f"pose={self._pose}, arms={self._enabled_arms}, targets_deg={targets}, "
             f"move_duration={self._move_duration_sec:.2f}s"
         )
 
     def _target_param_to_rad(self, parameter_name: str) -> list[float]:
         values = [
             float(value)
-            for value in self.get_parameter(parameter_name).get_parameter_value().double_array_value
+            for value in self.get_parameter(parameter_name)
+            .get_parameter_value()
+            .double_array_value
         ]
         if len(values) != 7:
             raise ValueError(f"{parameter_name} must contain 7 values, got {len(values)}")
@@ -284,17 +311,38 @@ class MarvinElbowPose(Node):
         self._timer.cancel()
 
 
+def _parse_args(args: Optional[List[str]] = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Move Marvin's arms to a predefined pose"
+    )
+    parser.add_argument(
+        "--pose",
+        choices=sorted(POSE_TARGETS_DEG),
+        help=(
+            "predefined pose to restore; defaults to the ROS parameter 'pose' "
+            f"({DEFAULT_POSE} when unset)"
+        ),
+    )
+    return parser.parse_args(args)
+
+
 def main(args: Optional[List[str]] = None) -> None:
-    rclpy.init(args=args)
-    node = MarvinElbowPose()
+    program_name = sys.argv[0] if sys.argv else "marvin_elbow_pose"
+    raw_args = sys.argv if args is None else [program_name, *args]
+    cli_args = _parse_args(remove_ros_args(raw_args)[1:])
+
+    rclpy.init(args=raw_args)
+    node: Optional[MarvinElbowPose] = None
     try:
+        node = MarvinElbowPose(pose_override=cli_args.pose)
         while rclpy.ok() and not node._shutdown_requested:
             rclpy.spin_once(node, timeout_sec=0.1)
     except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
-        with suppress(KeyboardInterrupt, RCLError):
-            node.destroy_node()
+        if node is not None:
+            with suppress(KeyboardInterrupt, RCLError):
+                node.destroy_node()
         if rclpy.ok():
             with suppress(KeyboardInterrupt, RCLError):
                 rclpy.shutdown()

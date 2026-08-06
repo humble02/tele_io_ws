@@ -48,7 +48,8 @@ with the same service command shown above.
 - `/io_teleop/joint_cmd`: optional direct arm joint commands forwarded by bridge
 - `/io_teleop/joint_cmd_finger_left`: left-hand commands forwarded by bridge
 - `/io_teleop/joint_cmd_finger_right`: right-hand commands forwarded by bridge
+- `/io_teleop/freeze_mask`: bit 0 freezes the left arm/hand; bit 1 freezes the right
+  arm/hand; zero resumes IO joint command control
 
 Do not publish both `/io_teleop/joint_cmd` and `/io_teleop/target_ee_poses` for
 the arms at the same time; they are two command sources for the same drivers.
-

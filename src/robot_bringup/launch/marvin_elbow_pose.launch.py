@@ -8,6 +8,7 @@ from launch_ros.parameter_descriptions import ParameterValue
 def generate_launch_description() -> LaunchDescription:
     return LaunchDescription(
         [
+            DeclareLaunchArgument("pose", default_value="prepare"),
             DeclareLaunchArgument("arms", default_value="both"),
             DeclareLaunchArgument("command_rate_hz", default_value="50.0"),
             DeclareLaunchArgument("hold_before_move_sec", default_value="0.5"),
@@ -17,8 +18,12 @@ def generate_launch_description() -> LaunchDescription:
             DeclareLaunchArgument("exit_on_success", default_value="true"),
             DeclareLaunchArgument("left_state_topic", default_value="/marvin/left/joint_states"),
             DeclareLaunchArgument("right_state_topic", default_value="/marvin/right/joint_states"),
-            DeclareLaunchArgument("left_command_topic", default_value="/marvin/left/joint_commands"),
-            DeclareLaunchArgument("right_command_topic", default_value="/marvin/right/joint_commands"),
+            DeclareLaunchArgument(
+                "left_command_topic", default_value="/marvin/left/joint_commands"
+            ),
+            DeclareLaunchArgument(
+                "right_command_topic", default_value="/marvin/right/joint_commands"
+            ),
             Node(
                 package="robot_bringup",
                 executable="marvin_elbow_pose",
@@ -27,6 +32,7 @@ def generate_launch_description() -> LaunchDescription:
                 emulate_tty=True,
                 parameters=[
                     {
+                        "pose": LaunchConfiguration("pose"),
                         "arms": LaunchConfiguration("arms"),
                         "command_rate_hz": ParameterValue(
                             LaunchConfiguration("command_rate_hz"), value_type=float

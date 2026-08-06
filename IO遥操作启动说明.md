@@ -50,6 +50,24 @@ ros2 launch io_joint_state_bridge io_joint_state_bridge.launch.py     publish_ra
 
 此时 IO 端可以发布 `/io_teleop/joint_cmd`。bridge 会将左右机械臂命令拆分后发送给 dummy driver。
 
+`joint_cmd` 模式默认同时启动 PCsensor USB 脚踏板节点：左踏板冻结左臂手，
+右踏板冻结右臂手，中间踏板解除所有冻结。冻结期间 bridge 会持续发送冻结前
+最后一次实际下发的关节目标；只有尚未下发过命令时才用实际反馈位置兜底。
+解除时会限速恢复到当前 IO 命令，避免关节目标一步跳变。
+
+首次使用需要安装依赖和 udev 权限规则：
+
+```bash
+sudo apt install python3-evdev
+sudo install -m 0644 \
+  "$(ros2 pkg prefix io_joint_state_bridge)/share/io_joint_state_bridge/udev/99-pcsensor-footswitch.rules" \
+  /etc/udev/rules.d/99-pcsensor-footswitch.rules
+sudo udevadm control --reload-rules
+sudo udevadm trigger
+```
+
+随后重新插拔脚踏板。若仍在运行 `evtest --grab`，需要先将其退出。
+
 ### 2.2 真机启动
 
 终端 1 启动真实机器人驱动：

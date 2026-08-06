@@ -101,14 +101,18 @@ hand commands use the default 20-joint order for the corresponding hand.
 Move the Marvin arms from the current measured feedback to a bent-elbow pose:
 
 ```bash
-ros2 launch robot_bringup marvin_elbow_pose.launch.py
+# Competition-ready pose (default)
+ros2 launch robot_bringup marvin_elbow_pose.launch.py pose:=prepare
+
+# Packed transport pose
+ros2 launch robot_bringup marvin_elbow_pose.launch.py pose:=transport
 ```
 
-Default targets are in degrees:
+The node can also be run directly:
 
-```text
-left:  [-90,  90, 90, -90, 0, 0, 0]
-right: [-90, -90, 90,  90, 0, 0, 0]
+```bash
+ros2 run robot_bringup marvin_elbow_pose --pose prepare
+ros2 run robot_bringup marvin_elbow_pose --pose transport
 ```
 
 The node waits for `/marvin/left/joint_states` and `/marvin/right/joint_states`,
