@@ -1,5 +1,5 @@
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
@@ -23,6 +23,20 @@ IO_COMMAND_JOINT_NAMES = [
     "Joint7_L",
 ]
 IO_STATE_JOINT_NAMES = IO_COMMAND_JOINT_NAMES
+VR_RESTART_CONFIRMATION_PROMPT = (
+    "\n[安全确认] 请确认 VR 所有服务已重启，且同步已关闭。"
+    "确认后按回车键继续执行 io_joint_state_bridge..."
+)
+
+
+def confirm_vr_services_restarted(_context):
+    try:
+        input(VR_RESTART_CONFIRMATION_PROMPT)
+    except EOFError as exc:
+        raise RuntimeError(
+            "io_joint_state_bridge 启动前需要在交互式终端中确认 VR 服务已重启"
+        ) from exc
+    return []
 
 
 def generate_launch_description() -> LaunchDescription:
@@ -71,6 +85,7 @@ def generate_launch_description() -> LaunchDescription:
             DeclareLaunchArgument(
                 "right_hand_command_topic", default_value="/hand_right/joint_commands"
             ),
+            OpaqueFunction(function=confirm_vr_services_restarted),
             Node(
                 package="io_joint_state_bridge",
                 executable="io_joint_state_bridge",

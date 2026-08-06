@@ -8,6 +8,10 @@ feedback is used for footswitch hold snapshots but is not included in the IO sta
 ros2 launch io_joint_state_bridge io_joint_state_bridge.launch.py
 ```
 
+The launch waits for an interactive confirmation that all VR services have been
+restarted. Press Enter at the terminal prompt to start the bridge and footswitch
+nodes.
+
 ## PCsensor footswitch interlock
 
 The launch file also starts `footswitch_pedal`, which discovers the
